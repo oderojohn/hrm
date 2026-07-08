@@ -19,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card"
 import { Select } from "../components/ui/Select";
 import { Button } from "../components/ui/Button";
 import { ExportButtonGroup } from "../components/ExportButtonGroup";
+import { DateRangeFilter, toAnalyticsParams, useDateRangeFilter } from "../components/DateRangeFilter";
 
 function monthRange() {
   const now = new Date();
@@ -109,7 +110,7 @@ const METRIC_OPTIONS: { value: "status" | "clock_in" | "clock_out" | "working_ho
 ];
 
 function AttendanceRegisterCard() {
-  const [period, setPeriod] = useState<"week" | "month">("month");
+  const [range, setRange] = useDateRangeFilter("month");
   const [branchId, setBranchId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [employeeId, setEmployeeId] = useState("");
@@ -123,7 +124,7 @@ function AttendanceRegisterCard() {
   const { data: employees } = useQuery({ queryKey: ["employees-all"], queryFn: fetchAllEmployeesForSelect });
 
   const params = {
-    period,
+    ...toAnalyticsParams(range),
     metric,
     branch: branchId ? Number(branchId) : undefined,
     department: departmentId ? Number(departmentId) : undefined,
@@ -151,10 +152,7 @@ function AttendanceRegisterCard() {
           leave all blank for the whole company — then choose what each date column should show before exporting.
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={period} onChange={(e) => setPeriod(e.target.value as "week" | "month")} className="w-36">
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
-          </Select>
+          <DateRangeFilter value={range} onChange={setRange} />
           <Select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-full sm:w-40">
             <option value="">All Branches</option>
             {branches?.results.map((b) => (
@@ -274,13 +272,14 @@ function PeriodReportCard({
 }: {
   title: string;
   icon: typeof CalendarDays;
-  fetcher: (params: { period: "week" | "month" }) => Promise<{ summary: { count: number } }>;
-  exportUrl: (format: "csv" | "xlsx" | "pdf", params: { period: "week" | "month" }) => string;
+  fetcher: (params: { period?: "week" | "month"; start?: string; end?: string }) => Promise<{ summary: { count: number } }>;
+  exportUrl: (format: "csv" | "xlsx" | "pdf", params: { period?: "week" | "month"; start?: string; end?: string }) => string;
 }) {
-  const [period, setPeriod] = useState<"week" | "month">("month");
+  const [range, setRange] = useDateRangeFilter("month");
+  const params = toAnalyticsParams(range);
   const { data, isLoading } = useQuery({
-    queryKey: [title, period],
-    queryFn: () => fetcher({ period }),
+    queryKey: [title, params],
+    queryFn: () => fetcher(params),
   });
 
   return (
@@ -289,13 +288,10 @@ function PeriodReportCard({
         <CardTitle className="flex items-center gap-2">
           <Icon className="h-4 w-4 text-slate-400" /> {title}
         </CardTitle>
-        <ExportButtonGroup onExport={(format) => downloadExport(exportUrl(format, { period }), `${title}.${format}`)} />
+        <ExportButtonGroup onExport={(format) => downloadExport(exportUrl(format, params), `${title}.${format}`)} />
       </CardHeader>
-      <CardContent className="flex items-center justify-between gap-3 px-4 pb-4 pt-0">
-        <Select value={period} onChange={(e) => setPeriod(e.target.value as "week" | "month")} className="w-36">
-          <option value="week">This Week</option>
-          <option value="month">This Month</option>
-        </Select>
+      <CardContent className="flex flex-wrap items-center justify-between gap-3 px-4 pb-4 pt-0">
+        <DateRangeFilter value={range} onChange={setRange} />
         <p className="text-sm text-slate-500">{isLoading ? "Loading…" : `${data?.summary.count ?? 0} record(s)`}</p>
       </CardContent>
     </Card>

@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card"
 import { Button } from "../components/ui/Button";
 import { Dialog } from "../components/ui/Dialog";
 import { Select } from "../components/ui/Select";
+import { Textarea } from "../components/ui/Textarea";
 import { ResourceForm } from "../components/resource/ResourceForm";
 import type { FormField } from "../components/resource/types";
 import { DataTable } from "../components/resource/DataTable";
@@ -211,6 +212,8 @@ function ApprovalsTab() {
   const [reassignTarget, setReassignTarget] = useState<LeaveRequest | null>(null);
   const [reassignApprover, setReassignApprover] = useState("");
   const [reassignError, setReassignError] = useState<string | null>(null);
+  const [commentTarget, setCommentTarget] = useState<{ request: LeaveRequest; action: "reject" | "return" } | null>(null);
+  const [comment, setComment] = useState("");
 
   const { data: requests, isLoading } = useQuery({
     queryKey: ["leave-requests", "pending"],
@@ -219,10 +222,26 @@ function ApprovalsTab() {
   const { data: employees } = useQuery({ queryKey: ["employees-all"], queryFn: fetchAllEmployeesForSelect });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["leave-requests"] });
+  const closeCommentDialog = () => {
+    setCommentTarget(null);
+    setComment("");
+  };
 
   const approveMutation = useMutation({ mutationFn: (id: number) => approveLeaveRequest(id), onSuccess: invalidate });
-  const rejectMutation = useMutation({ mutationFn: (id: number) => rejectLeaveRequest(id), onSuccess: invalidate });
-  const returnMutation = useMutation({ mutationFn: (id: number) => returnForCorrection(id), onSuccess: invalidate });
+  const rejectMutation = useMutation({
+    mutationFn: () => rejectLeaveRequest(commentTarget!.request.id, comment),
+    onSuccess: () => {
+      invalidate();
+      closeCommentDialog();
+    },
+  });
+  const returnMutation = useMutation({
+    mutationFn: () => returnForCorrection(commentTarget!.request.id, comment),
+    onSuccess: () => {
+      invalidate();
+      closeCommentDialog();
+    },
+  });
   const reassignMutation = useMutation({
     mutationFn: ({ id, approverId }: { id: number; approverId: number }) => reassignLeaveStep(id, approverId),
     onSuccess: () => {
@@ -263,10 +282,10 @@ function ApprovalsTab() {
                       <Button size="sm" variant="ghost" onClick={() => setReassignTarget(r)}>
                         Reassign
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => returnMutation.mutate(r.id)}>
+                      <Button size="sm" variant="outline" onClick={() => setCommentTarget({ request: r, action: "return" })}>
                         Return
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => rejectMutation.mutate(r.id)}>
+                      <Button size="sm" variant="outline" onClick={() => setCommentTarget({ request: r, action: "reject" })}>
                         Reject
                       </Button>
                       <Button size="sm" onClick={() => approveMutation.mutate(r.id)}>
@@ -315,6 +334,40 @@ function ApprovalsTab() {
                 }
               >
                 Reassign
+              </Button>
+            </div>
+          </div>
+        )}
+      </Dialog>
+
+      <Dialog
+        open={!!commentTarget}
+        onClose={closeCommentDialog}
+        title={commentTarget?.action === "reject" ? "Reject Leave Request" : "Return for Correction"}
+      >
+        {commentTarget && (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              {commentTarget.action === "reject" ? "Rejecting" : "Returning"} {commentTarget.request.employee_name}'s{" "}
+              {commentTarget.request.leave_type_name} request ({formatDate(commentTarget.request.start_date)} →{" "}
+              {formatDate(commentTarget.request.end_date)}).
+            </p>
+            <Textarea
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder={commentTarget.action === "reject" ? "Reason for rejection (optional)" : "What needs to change (optional)"}
+              rows={3}
+            />
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+              <Button variant="outline" onClick={closeCommentDialog}>
+                Cancel
+              </Button>
+              <Button
+                variant={commentTarget.action === "reject" ? "danger" : "primary"}
+                loading={commentTarget.action === "reject" ? rejectMutation.isPending : returnMutation.isPending}
+                onClick={() => (commentTarget.action === "reject" ? rejectMutation.mutate() : returnMutation.mutate())}
+              >
+                {commentTarget.action === "reject" ? "Reject" : "Return"}
               </Button>
             </div>
           </div>

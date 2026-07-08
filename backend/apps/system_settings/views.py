@@ -1,10 +1,12 @@
+from django.core.mail import send_mail
 from django.utils import timezone
-from rest_framework import viewsets
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.permissions import IsSuperAdmin
+from apps.system_settings.email import get_configured_connection, get_from_email
 from apps.system_settings.models import (
     BackupRecord,
     EmailSettings,
@@ -41,6 +43,37 @@ class EmailSettingsView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+class EmailSettingsTestView(APIView):
+    """Sends a real test email through the currently saved SMTP settings, so
+    an admin can confirm Gmail credentials actually work before relying on
+    them for real leave/attendance notifications.
+    """
+
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request):
+        connection = get_configured_connection()
+        if connection is None:
+            return Response(
+                {"detail": "Set SMTP host, username, and password first."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        recipient = request.data.get("to") or request.user.email
+        if not recipient:
+            return Response({"detail": "No recipient email address available."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            send_mail(
+                "Nexas HRM — Test Email",
+                "This is a test email confirming your SMTP settings are working correctly.",
+                get_from_email(),
+                [recipient],
+                connection=connection,
+                fail_silently=False,
+            )
+        except Exception as exc:
+            return Response({"detail": f"Failed to send: {exc}"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": f"Test email sent to {recipient}."})
 
 
 class SMSGatewaySettingsView(APIView):

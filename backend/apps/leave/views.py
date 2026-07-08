@@ -23,6 +23,7 @@ from apps.leave.models import (
 from apps.leave.notifications import (
     notify_advanced,
     notify_approved,
+    notify_cancelled,
     notify_reassigned,
     notify_rejected,
     notify_returned,
@@ -261,6 +262,12 @@ class LeaveRequestViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
                     balance.save(update_fields=["used_days"])
                 notify_approved(leave_request)
 
+        # The next-step activation above uses a bulk .filter().update(),
+        # which bypasses the ORM entirely and never touches the
+        # already-prefetched `approval_steps` cache on this instance (from
+        # get_queryset()'s prefetch_related) — without this, the response
+        # would serialize step states from before this request's mutations.
+        leave_request.refresh_from_db()
         return Response(LeaveRequestSerializer(leave_request).data)
 
     @action(detail=True, methods=["post"])
@@ -284,6 +291,7 @@ class LeaveRequestViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
         leave_request.save(update_fields=["status"])
         log_leave_action(request, AuditLog.Action.REJECT, leave_request, {"comment": comment})
         notify_rejected(leave_request, comment)
+        leave_request.refresh_from_db()
         return Response(LeaveRequestSerializer(leave_request).data)
 
     @action(detail=True, methods=["post"])
@@ -316,6 +324,7 @@ class LeaveRequestViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
             {"event": "reassigned", "step": step.name, "new_approver_id": new_approver.id, "comment": comment},
         )
         notify_reassigned(step)
+        leave_request.refresh_from_db()
         return Response(LeaveRequestSerializer(leave_request).data)
 
     @action(detail=True, methods=["post"])
@@ -331,6 +340,7 @@ class LeaveRequestViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
         leave_request.save(update_fields=["status"])
         log_leave_action(request, AuditLog.Action.OTHER, leave_request, {"event": "returned", "comment": comment})
         notify_returned(leave_request, comment)
+        leave_request.refresh_from_db()
         return Response(LeaveRequestSerializer(leave_request).data)
 
     @action(detail=True, methods=["post"])
@@ -362,6 +372,7 @@ class LeaveRequestViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
         build_dynamic_approval_chain(leave_request)
         log_leave_action(request, AuditLog.Action.OTHER, leave_request, {"event": "resubmitted"})
         notify_submitted(leave_request)
+        leave_request.refresh_from_db()
         return Response(LeaveRequestSerializer(leave_request).data)
 
     @action(detail=True, methods=["post"])
@@ -391,6 +402,7 @@ class LeaveRequestViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
         leave_request.cancelled_reason = request.data.get("reason", "")
         leave_request.save(update_fields=["status", "cancelled_reason"])
         log_leave_action(request, AuditLog.Action.CANCEL, leave_request, {"reason": leave_request.cancelled_reason})
+        notify_cancelled(leave_request)
         return Response(LeaveRequestSerializer(leave_request).data)
 
     @action(detail=False, methods=["get"])

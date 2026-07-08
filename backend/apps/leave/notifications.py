@@ -1,8 +1,11 @@
 """Thin notification hooks for the leave approval lifecycle, built on the
-existing apps.communication.Notification model + Django's configured email backend.
+existing apps.communication.Notification model + the admin-configured SMTP
+connection (Settings -> Email Settings), falling back to the static
+EMAIL_BACKEND in config/settings.py if nothing's configured yet.
 """
-from django.conf import settings
 from django.core.mail import send_mail
+
+from apps.system_settings.email import get_configured_connection, get_from_email
 
 
 def _notify_user(user, title, body, related_url=""):
@@ -19,7 +22,7 @@ def _notify_user(user, title, body, related_url=""):
     )
     if user.email:
         try:
-            send_mail(title, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=True)
+            send_mail(title, body, get_from_email(), [user.email], connection=get_configured_connection(), fail_silently=True)
         except Exception:
             pass
 
@@ -90,3 +93,26 @@ def notify_returned(leave_request, comment=""):
 
 def notify_reassigned(step):
     notify_step(step)
+
+
+def notify_cancelled(leave_request):
+    # Tell whoever currently has a pending step so they don't act on a
+    # request the employee has already withdrawn.
+    step = leave_request.approval_steps.filter(status="PENDING").order_by("step_order").first()
+    if step and step.approver:
+        notify_employee(
+            step.approver,
+            "Leave request cancelled",
+            f"{leave_request.employee.full_name}'s {leave_request.leave_type.name} request "
+            f"({leave_request.start_date} to {leave_request.end_date}) was cancelled before you acted on it.",
+        )
+    elif step and step.system_role:
+        from apps.accounts.models import User
+
+        for user in User.objects.filter(role=step.system_role, is_active=True):
+            _notify_user(
+                user,
+                "Leave request cancelled",
+                f"{leave_request.employee.full_name}'s {leave_request.leave_type.name} request "
+                f"({leave_request.start_date} to {leave_request.end_date}) was cancelled before you acted on it.",
+            )

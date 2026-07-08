@@ -548,11 +548,18 @@ class AttendanceGridReportView(APIView):
         ).values_list("employee_id", "start_date", "end_date"):
             leaves_by_employee[employee_id].append((leave_start, leave_end))
 
+        today = timezone.now().date()
+
         def day_status(employee, day, record):
             if any(s <= day <= e for s, e in leaves_by_employee.get(employee.id, [])):
                 return "LV"
             if record and record.clock_in:
                 return "L" if record.is_late else "P"
+            if day > today:
+                # Hasn't happened yet — "Absent" would be a false claim about
+                # the future. Blank reads as "not yet known" in both the
+                # preview grid and the exported sheet.
+                return ""
             if is_expected_working_day(employee, day, holiday_dates):
                 return "A"
             return "OFF"

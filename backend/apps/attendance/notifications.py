@@ -1,9 +1,11 @@
 """Thin notification hooks for the attendance-correction approval lifecycle,
-mirroring apps.leave.notifications — same Notification model + best-effort
-email, just for the Employee -> Supervisor -> HR correction chain.
+mirroring apps.leave.notifications — same Notification model + the
+admin-configured SMTP connection, just for the Employee -> Supervisor -> HR
+correction chain.
 """
-from django.conf import settings
 from django.core.mail import send_mail
+
+from apps.system_settings.email import get_configured_connection, get_from_email
 
 
 def _notify_user(user, title, body, related_url=""):
@@ -20,7 +22,7 @@ def _notify_user(user, title, body, related_url=""):
     )
     if user.email:
         try:
-            send_mail(title, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=True)
+            send_mail(title, body, get_from_email(), [user.email], connection=get_configured_connection(), fail_silently=True)
         except Exception:
             pass
 

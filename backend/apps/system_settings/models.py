@@ -18,14 +18,18 @@ class SystemSetting(BaseModel):
 
 
 class EmailSettings(BaseModel):
-    """Effectively a singleton — documents the SMTP config for review in the admin UI.
+    """Effectively a singleton — SMTP config editable from the Settings UI.
 
-    Actual email sending is driven by EMAIL_BACKEND settings in config/settings.py.
+    When smtp_host/smtp_username/smtp_password are all set, apps.system_settings.email
+    builds a live SMTP connection from these values for every outgoing notification
+    email; otherwise sending falls back to the static EMAIL_BACKEND in
+    config/settings.py (console backend by default in dev).
     """
 
     smtp_host = models.CharField(max_length=255, blank=True)
-    smtp_port = models.PositiveIntegerField(null=True, blank=True)
+    smtp_port = models.PositiveIntegerField(null=True, blank=True, default=587)
     smtp_username = models.CharField(max_length=255, blank=True)
+    smtp_password = models.CharField(max_length=255, blank=True)
     use_tls = models.BooleanField(default=True)
     from_email = models.EmailField(blank=True)
 

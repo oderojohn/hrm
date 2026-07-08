@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarPlus, KeyRound, Plus, Power, Trash2 } from "lucide-react";
+import { CalendarPlus, CheckCircle2, KeyRound, Mail, Plus, Power, Send, Trash2 } from "lucide-react";
 import {
   syncAgentsApi,
   syncEventsApi,
@@ -11,6 +11,7 @@ import {
 } from "../api/sync";
 import { fetchAttendanceSettings, updateAttendanceSettings } from "../api/attendance";
 import { publicHolidaysApi, type PublicHoliday } from "../api/core";
+import { fetchEmailSettings, updateEmailSettings, sendTestEmail } from "../api/systemSettings";
 import { branchesApi } from "../api/organization";
 import { extractErrorMessage } from "../api/client";
 import { Tabs } from "../components/ui/Tabs";
@@ -40,6 +41,7 @@ export function SystemSettingsPage() {
           { key: "agents", label: "Sync Agents", content: <SyncAgentsTab /> },
           { key: "log", label: "Sync Activity Log", content: <SyncActivityLogTab /> },
           { key: "attendance", label: "Attendance Settings", content: <AttendanceSettingsTab /> },
+          { key: "email", label: "Email Settings", content: <EmailSettingsTab /> },
         ]}
       />
     </div>
@@ -449,5 +451,147 @@ function SyncActivityLogTab() {
         )}
       </Dialog>
     </div>
+  );
+}
+
+function EmailSettingsTab() {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery({ queryKey: ["email-settings"], queryFn: fetchEmailSettings });
+
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState("587");
+  const [smtpUsername, setSmtpUsername] = useState("");
+  const [smtpPassword, setSmtpPassword] = useState("");
+  const [useTls, setUseTls] = useState(true);
+  const [fromEmail, setFromEmail] = useState("");
+  const [testTo, setTestTo] = useState("");
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!data) return;
+    setSmtpHost(data.smtp_host);
+    setSmtpPort(data.smtp_port ? String(data.smtp_port) : "587");
+    setSmtpUsername(data.smtp_username);
+    setUseTls(data.use_tls);
+    setFromEmail(data.from_email);
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      updateEmailSettings({
+        smtp_host: smtpHost,
+        smtp_port: smtpPort ? Number(smtpPort) : null,
+        smtp_username: smtpUsername,
+        smtp_password: smtpPassword || undefined,
+        use_tls: useTls,
+        from_email: fromEmail,
+      }),
+    onSuccess: () => {
+      setSmtpPassword("");
+      setTestResult(null);
+      queryClient.invalidateQueries({ queryKey: ["email-settings"] });
+    },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: () => sendTestEmail(testTo || undefined),
+    onSuccess: (result) => setTestResult({ ok: true, message: result.detail }),
+    onError: (err) => setTestResult({ ok: false, message: extractErrorMessage(err) }),
+  });
+
+  if (isLoading) return <FullPageSpinner />;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Mail className="h-4 w-4 text-slate-400" /> Email (SMTP) Settings
+        </CardTitle>
+        {data?.is_configured && (
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
+            <CheckCircle2 className="h-3.5 w-3.5" /> Configured
+          </span>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-4 px-4 pb-4 pt-0">
+        <p className="text-xs text-slate-500">
+          Used to send real emails for leave/attendance approval notifications. For Gmail: enable 2-Step
+          Verification on the account, then generate an App Password at{" "}
+          <span className="font-mono">myaccount.google.com/apppasswords</span> — use that here, not your normal
+          Gmail password.
+        </p>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <Label>SMTP Host</Label>
+            <Input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder="smtp.gmail.com" />
+          </div>
+          <div>
+            <Label>SMTP Port</Label>
+            <Input value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)} placeholder="587" />
+          </div>
+          <div>
+            <Label>Gmail Address (SMTP Username)</Label>
+            <Input
+              value={smtpUsername}
+              onChange={(e) => setSmtpUsername(e.target.value)}
+              placeholder="you@gmail.com"
+            />
+          </div>
+          <div>
+            <Label>App Password</Label>
+            <Input
+              type="password"
+              value={smtpPassword}
+              onChange={(e) => setSmtpPassword(e.target.value)}
+              placeholder={data?.is_configured ? "•••••••••••••••• (leave blank to keep)" : "16-character app password"}
+            />
+          </div>
+          <div>
+            <Label>From Address</Label>
+            <Input
+              value={fromEmail}
+              onChange={(e) => setFromEmail(e.target.value)}
+              placeholder="Defaults to the Gmail address above"
+            />
+          </div>
+          <div className="flex items-end">
+            <label className="flex h-9 items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={useTls}
+                onChange={(e) => setUseTls(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              />
+              Use TLS
+            </label>
+          </div>
+        </div>
+
+        <div className="flex justify-end border-t border-slate-100 pt-4">
+          <Button onClick={() => saveMutation.mutate()} loading={saveMutation.isPending}>
+            Save
+          </Button>
+        </div>
+
+        <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-medium text-slate-600">Send a test email to confirm this actually works:</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={testTo}
+              onChange={(e) => setTestTo(e.target.value)}
+              placeholder="Defaults to your own account email"
+              className="flex-1"
+            />
+            <Button variant="outline" onClick={() => testMutation.mutate()} loading={testMutation.isPending}>
+              <Send className="h-3.5 w-3.5" /> Send Test Email
+            </Button>
+          </div>
+          {testResult && (
+            <p className={testResult.ok ? "text-xs text-emerald-600" : "text-xs text-red-600"}>{testResult.message}</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
