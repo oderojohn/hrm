@@ -4,6 +4,7 @@ from apps.reports.views import (
     AbsenteeismReportView,
     AssetReportView,
     AttendanceAnalyticsView,
+    AttendanceGridReportView,
     AttendanceReportView,
     BranchReportView,
     DashboardView,
@@ -24,6 +25,7 @@ urlpatterns = [
     path("employees/", EmployeeReportView.as_view(), name="report-employees"),
     path("attendance/", AttendanceReportView.as_view(), name="report-attendance"),
     path("attendance-analytics/", AttendanceAnalyticsView.as_view(), name="report-attendance-analytics"),
+    path("attendance-grid/", AttendanceGridReportView.as_view(), name="report-attendance-grid"),
     path("attendance-late-arrivals/", LateArrivalsReportView.as_view(), name="report-attendance-late-arrivals"),
     path("attendance-absenteeism/", AbsenteeismReportView.as_view(), name="report-attendance-absenteeism"),
     path(

@@ -88,3 +88,27 @@ export async function fetchAbsenteeismReport(params?: ReportQueryParams) {
 export function absenteeismReportExportUrl(format: "csv" | "xlsx" | "pdf", params?: ReportQueryParams) {
   return reportUrl("/reports/attendance-absenteeism/", format, params);
 }
+
+export interface AttendanceGridReportParams extends ReportQueryParams {
+  employee?: number;
+}
+
+export interface AttendanceGridReport {
+  period: "week" | "month" | "custom";
+  start: string;
+  end: string;
+  dates: string[];
+  legend: Record<string, string>;
+  headers: string[];
+  results: Array<Array<string>>;
+  count: number;
+}
+
+export async function fetchAttendanceGridReport(params?: AttendanceGridReportParams) {
+  const { data } = await apiClient.get<AttendanceGridReport>("/reports/attendance-grid/", { params });
+  return data;
+}
+
+export function attendanceGridReportExportUrl(format: "csv" | "xlsx" | "pdf", params?: AttendanceGridReportParams) {
+  return reportUrl("/reports/attendance-grid/", format, params);
+}

@@ -90,6 +90,92 @@ def export_xlsx(rows, headers, filename="export.xlsx"):
     return response
 
 
+ATTENDANCE_STATUS_FILL = {
+    "P": "C6EFCE",
+    "L": "FFEB9C",
+    "A": "FFC7CE",
+    "LV": "BDD7EE",
+    "OFF": "F2F2F2",
+}
+ATTENDANCE_STATUS_TEXT = {
+    "P": "006100",
+    "L": "9C6500",
+    "A": "9C0006",
+    "LV": "1F4E78",
+    "OFF": "808080",
+}
+
+
+def export_attendance_grid_xlsx(rows, headers, status_col_start, filename="attendance_grid.xlsx"):
+    """Like export_xlsx, but colors each attendance-status cell (P/L/A/LV/OFF)
+    and freezes the info columns + header row so a wide date range stays
+    readable while scrolling — used for the Employee/Department/Company
+    present-absent grid report, not the generic flat-row exports.
+    """
+    profile = _company_profile()
+    workbook = Workbook()
+    sheet = workbook.active
+
+    header_fill = PatternFill(start_color=BRAND_GOLD.lstrip("#"), end_color=BRAND_GOLD.lstrip("#"), fill_type="solid")
+    zebra_fill = PatternFill(start_color=BRAND_GOLD_LIGHT.lstrip("#"), end_color=BRAND_GOLD_LIGHT.lstrip("#"), fill_type="solid")
+    dark_font = Font(color=BRAND_TEXT_DARK.lstrip("#"), bold=True)
+
+    title_row = 1
+    header_row = 2
+    if profile.logo:
+        try:
+            img = XlsxImage(profile.logo.path)
+            img.height, img.width = 42, 140
+            sheet.add_image(img, "A1")
+            title_row = 4
+            header_row = 5
+        except FileNotFoundError:
+            pass
+
+    sheet.cell(row=title_row, column=1, value=f"{profile.name} — {_report_title(filename)}").font = Font(
+        bold=True, size=13, color=BRAND_TEXT_DARK.lstrip("#")
+    )
+
+    for col, heading in enumerate(headers, start=1):
+        cell = sheet.cell(row=header_row, column=col, value=heading)
+        cell.fill = header_fill
+        cell.font = dark_font
+        cell.alignment = Alignment(horizontal="center" if col > status_col_start else "left")
+
+    for r_offset, row in enumerate(rows):
+        for col, value in enumerate(row, start=1):
+            cell = sheet.cell(row=header_row + 1 + r_offset, column=col, value=value)
+            if col > status_col_start:
+                fill = ATTENDANCE_STATUS_FILL.get(value)
+                if fill:
+                    cell.fill = PatternFill(start_color=fill, end_color=fill, fill_type="solid")
+                    cell.font = Font(color=ATTENDANCE_STATUS_TEXT.get(value, BRAND_TEXT_DARK.lstrip("#")), bold=True)
+                cell.alignment = Alignment(horizontal="center")
+            elif r_offset % 2 == 1:
+                cell.fill = zebra_fill
+
+    for col in range(1, status_col_start + 1):
+        sheet.column_dimensions[get_column_letter(col)].width = 20
+    for col in range(status_col_start + 1, len(headers) + 1):
+        sheet.column_dimensions[get_column_letter(col)].width = 7
+
+    sheet.freeze_panes = sheet.cell(row=header_row + 1, column=status_col_start + 1)
+
+    legend_row = header_row + len(rows) + 2
+    legend = "Legend:  P = Present   L = Late   A = Absent   LV = On Leave   OFF = Non-working day"
+    sheet.cell(row=legend_row, column=1, value=legend).font = Font(italic=True, size=9, color="64748b")
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    response = HttpResponse(
+        buffer.read(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
 def _format_cell(value):
     if value is None or value == "":
         return "—"

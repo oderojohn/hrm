@@ -14,7 +14,7 @@ from apps.assets.models import Asset
 from apps.attendance.models import AttendanceRecord, PunchLog
 from apps.attendance.utils import count_expected_working_days, is_expected_working_day
 from apps.communication.models import Announcement
-from apps.core.exports import export_queryset
+from apps.core.exports import export_attendance_grid_xlsx, export_csv, export_pdf, export_queryset
 from apps.core.models import PublicHoliday
 from apps.core.permissions import IsHRManagerOrAbove
 from apps.disciplinary.models import DisciplinaryCase
@@ -495,6 +495,102 @@ class AbsenteeismReportView(BaseReportView):
             employee.department.name if employee.department else "",
             day,
         ]
+
+
+class AttendanceGridReportView(APIView):
+    """Present/Absent register: one row per employee, one column per date in
+    the period — the classic printable monthly attendance sheet. Filterable
+    down to a single employee, a department, or left open for the whole
+    company. CSV/PDF reuse the generic flat-row exporters (headers are just
+    the date columns); XLSX uses export_attendance_grid_xlsx for per-cell
+    status coloring instead of the plain generic export_xlsx.
+    """
+
+    permission_classes = [IsHRManagerOrAbove]
+
+    STATUS_LABELS = {"P": "Present", "L": "Late", "A": "Absent", "LV": "On Leave", "OFF": "Non-working day"}
+
+    def get(self, request):
+        start, end, period = resolve_period(request)
+
+        employees = _scoped_employees(request.user).filter(employment_status=Employee.EmploymentStatus.ACTIVE)
+        department_param = request.query_params.get("department")
+        employee_param = request.query_params.get("employee")
+        branch_param = request.query_params.get("branch")
+        if department_param:
+            employees = employees.filter(department_id=department_param)
+        if employee_param:
+            employees = employees.filter(id=employee_param)
+        if branch_param:
+            employees = employees.filter(branch_id=branch_param)
+        employees = list(employees.select_related("department", "work_shift").order_by("employee_number"))
+
+        dates = []
+        cursor = start
+        while cursor <= end:
+            dates.append(cursor)
+            cursor += timedelta(days=1)
+
+        holiday_dates = set(
+            PublicHoliday.objects.filter(date__gte=start, date__lte=end).values_list("date", flat=True)
+        )
+
+        records_by_employee = defaultdict(dict)
+        for r in AttendanceRecord.objects.filter(employee__in=employees, date__gte=start, date__lte=end):
+            records_by_employee[r.employee_id][r.date] = r
+
+        leaves_by_employee = defaultdict(list)
+        for employee_id, leave_start, leave_end in LeaveRequest.objects.filter(
+            employee__in=employees,
+            status=LeaveRequest.Status.APPROVED,
+            start_date__lte=end,
+            end_date__gte=start,
+        ).values_list("employee_id", "start_date", "end_date"):
+            leaves_by_employee[employee_id].append((leave_start, leave_end))
+
+        def day_status(employee, day):
+            record = records_by_employee.get(employee.id, {}).get(day)
+            if any(s <= day <= e for s, e in leaves_by_employee.get(employee.id, [])):
+                return "LV"
+            if record and record.clock_in:
+                return "L" if record.is_late else "P"
+            if is_expected_working_day(employee, day, holiday_dates):
+                return "A"
+            return "OFF"
+
+        headers = ["Employee No.", "Employee", "Department"] + [d.strftime("%d %b") for d in dates]
+
+        def row(employee):
+            return [
+                employee.employee_number,
+                employee.full_name,
+                employee.department.name if employee.department else "",
+                *[day_status(employee, d) for d in dates],
+            ]
+
+        rows = [row(e) for e in employees]
+
+        fmt = request.query_params.get("format", "").lower()
+        base_filename = "attendance_register"
+        if fmt == "csv":
+            return export_csv(rows, headers, f"{base_filename}.csv")
+        if fmt == "xlsx":
+            return export_attendance_grid_xlsx(rows, headers, status_col_start=3, filename=f"{base_filename}.xlsx")
+        if fmt == "pdf":
+            return export_pdf(rows, headers, f"{base_filename}.pdf")
+
+        return Response(
+            {
+                "period": period,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "dates": [d.isoformat() for d in dates],
+                "legend": self.STATUS_LABELS,
+                "headers": headers,
+                "results": rows[:50],
+                "count": len(rows),
+            }
+        )
 
 
 @dataclass
