@@ -4,6 +4,7 @@ for enrollment (employee list) and raw punches (attendance logs); HR completes
 the rest of an auto-created employee's profile afterwards.
 """
 from collections import defaultdict
+from datetime import timedelta
 
 from django.utils import timezone
 
@@ -12,10 +13,19 @@ from apps.attendance.utils import evaluate_clock_in, evaluate_clock_out
 from apps.attendance.zkteco import ZKTecoClient
 from apps.employees.models import Employee
 
-# pyzk's punch/status codes vary by device configuration, so this mapping is
-# best-effort metadata for the punch log only — it never drives is_late/overtime.
+# The real Emboita device tags every punch as either 0 (check-in) or 1
+# (check-out) — confirmed against production punch history, no UNKNOWN codes
+# in practice. This mapping is authoritative for pairing sessions (see
+# ingest_punches); codes 4/5 are kept as a documented alias in case a
+# differently-configured device uses the OT-in/OT-out convention instead.
 _IN_PUNCH_CODES = {0, 4}
 _OUT_PUNCH_CODES = {1, 5}
+
+# Safety bound only, not the primary IN/OUT signal (that comes from the
+# device's own event tag) — just how far back to look for a still-open
+# session an OUT/UNKNOWN punch might belong to, so we don't match it against
+# a session abandoned weeks ago.
+_OPEN_SESSION_WINDOW_HOURS = 24
 
 
 def _infer_event_from_status(raw_status):
@@ -131,72 +141,125 @@ def sync_employees_from_device(client=None):
     return sync_employees_from_list(client.fetch_users())
 
 
-def ingest_punches(punches, device=None):
-    """Writes PunchLog rows and collapses them per employee/day into first-in/last-out
-    AttendanceRecord rows. Punch semantics vary by device configuration, so instead
-    of trusting individual IN/OUT codes, the earliest punch of the day is treated
-    as clock-in and the latest as clock-out. Every individual punch is also kept
-    verbatim in PunchLog, since the collapse above discards everything except the
-    first and last punch of the day.
+def _find_open_session(employee, before_timestamp):
+    """The employee's most recent still-open (clock_in set, clock_out not)
+    record whose clock_in precedes `before_timestamp` and is recent enough
+    to plausibly be the same shift — the record an OUT (or ambiguous) punch
+    should close. Bounded so an OUT punch never gets matched to a session
+    abandoned weeks earlier."""
+    cutoff = before_timestamp - timedelta(hours=_OPEN_SESSION_WINDOW_HOURS)
+    return (
+        AttendanceRecord.objects.filter(
+            employee=employee,
+            clock_in__isnull=False,
+            clock_out__isnull=True,
+            clock_in__gte=cutoff,
+            clock_in__lt=before_timestamp,
+        )
+        .order_by("-clock_in")
+        .first()
+    )
 
-    `punches` is any iterable of (employee, timestamp, raw_status) tuples — this is
-    the shared core used both by the ZK-device pull sync and the local agent's HTTP
-    push, so "cloud pulls from device" and "agent pushes to cloud" never duplicate
+
+def _apply_punch(employee, timestamp, event, device):
+    """Applies one punch — already known to be the chronologically-next one
+    for this employee — to whichever AttendanceRecord it belongs to.
+
+    Trusts the device's own IN/OUT tag as authoritative (confirmed reliable
+    against real production data) rather than inferring "first punch of the
+    day is clock-in" — that heuristic breaks for night-shift staff, whose
+    clock-out lands on the *next* calendar date and would otherwise be
+    misread as a brand-new clock-in for that date. Pairing an OUT against
+    whatever session is still open (regardless of which date it started on)
+    is what correctly attributes an overnight shift's punches to the single
+    day it began.
+
+    Returns (record, was_created, was_updated).
+    """
+    open_session = _find_open_session(employee, timestamp)
+    treat_as_close = event == PunchLog.Event.OUT or (event == PunchLog.Event.UNKNOWN and open_session is not None)
+
+    if treat_as_close:
+        if open_session:
+            record, was_created = open_session, False
+        else:
+            # Orphan OUT — no matching clock-in in our history (typically
+            # the very first punch we ever see for this employee). A
+            # pre-noon orphan OUT almost always means "closing a shift that
+            # started the day before, which we simply have no record of" —
+            # attribute it to the previous date so it can't collide with
+            # that same day's own legitimate evening clock-in (which would
+            # otherwise merge into this record and corrupt both).
+            orphan_date = timestamp.date() - timedelta(days=1) if timestamp.hour < 12 else timestamp.date()
+            record, was_created = AttendanceRecord.objects.get_or_create(
+                employee=employee, date=orphan_date, defaults={"method": AttendanceRecord.Method.BIOMETRIC}
+            )
+        record.method = AttendanceRecord.Method.BIOMETRIC
+        record.device = device
+        if not record.clock_out or timestamp > record.clock_out:
+            record.clock_out = timestamp
+            evaluate_clock_out(record, employee, timestamp)
+            record.save()
+            return record, was_created, True
+        record.save()
+        return record, was_created, False
+
+    # IN (or UNKNOWN with nothing open) starts/continues a session dated to
+    # this punch's own day — a plain clock-in is never retroactively
+    # attributed to an earlier date.
+    record, was_created = AttendanceRecord.objects.get_or_create(
+        employee=employee, date=timestamp.date(), defaults={"method": AttendanceRecord.Method.BIOMETRIC}
+    )
+    record.method = AttendanceRecord.Method.BIOMETRIC
+    record.device = device
+    if not record.clock_in or timestamp < record.clock_in:
+        record.clock_in = timestamp
+        evaluate_clock_in(record, employee, timestamp)
+        record.save()
+        return record, was_created, True
+    record.save()
+    return record, was_created, False
+
+
+def ingest_punches(punches, device=None):
+    """Writes PunchLog rows verbatim, then applies each punch — in strict
+    chronological order per employee — to build/extend AttendanceRecord
+    sessions (see _apply_punch). `punches` is any iterable of
+    (employee, timestamp, raw_status) tuples — this is the shared core used
+    both by the ZK-device pull sync and the local agent's HTTP push, so
+    "cloud pulls from device" and "agent pushes to cloud" never duplicate
     this logic.
     """
-    by_employee_day = defaultdict(list)
-    employees_by_day = {}
+    by_employee = defaultdict(list)
     punches_created, punches_duplicate = 0, 0
 
     for employee, timestamp, raw_status in punches:
         if timezone.is_naive(timestamp):
             timestamp = timezone.make_aware(timestamp)
-        key = (employee.id, timestamp.date())
-        by_employee_day[key].append(timestamp)
-        employees_by_day[key] = employee
+        event = _infer_event_from_status(raw_status)
 
         _, was_created = PunchLog.objects.get_or_create(
             employee=employee,
             device=device,
             timestamp=timestamp,
-            defaults={
-                "event": _infer_event_from_status(raw_status),
-                "method": AttendanceRecord.Method.BIOMETRIC,
-                "raw_status": raw_status,
-            },
+            defaults={"event": event, "method": AttendanceRecord.Method.BIOMETRIC, "raw_status": raw_status},
         )
         punches_created += int(was_created)
         punches_duplicate += int(not was_created)
+        by_employee[employee.id].append((timestamp, event, employee))
 
     created, updated = 0, 0
-    for (employee_id, day), timestamps in by_employee_day.items():
-        employee = employees_by_day[(employee_id, day)]
-        batch_first = min(timestamps)
-        batch_last = max(timestamps)
-
-        record, was_created = AttendanceRecord.objects.get_or_create(
-            employee=employee, date=day, defaults={"method": AttendanceRecord.Method.BIOMETRIC}
-        )
-        record.method = AttendanceRecord.Method.BIOMETRIC
-        record.device = device
-        if not record.clock_in or batch_first < record.clock_in:
-            record.clock_in = batch_first
-            evaluate_clock_in(record, employee, batch_first)
-        # A punch later than the established clock-in is a clock-out candidate.
-        # This can't be gated on "more than one punch in *this* batch" — the
-        # local agent pushes incrementally, often one punch at a time, so a
-        # day's clock-out punch frequently arrives alone in its own batch,
-        # long after the clock-in punch was already synced and saved.
-        if batch_last != record.clock_in and (not record.clock_out or batch_last > record.clock_out):
-            record.clock_out = batch_last
-            evaluate_clock_out(record, employee, batch_last)
-        record.save()
-
-        created += int(was_created)
-        updated += int(not was_created)
+    affected_days = set()
+    for employee_id, entries in by_employee.items():
+        entries.sort(key=lambda entry: entry[0])
+        for timestamp, event, employee in entries:
+            record, was_created, was_updated = _apply_punch(employee, timestamp, event, device)
+            created += int(was_created)
+            updated += int(was_updated and not was_created)
+            affected_days.add((employee_id, record.date))
 
     return {
-        "days_synced": len(by_employee_day),
+        "days_synced": len(affected_days),
         "records_created": created,
         "records_updated": updated,
         "punches_created": punches_created,
