@@ -24,3 +24,12 @@ local-agent/**/__pycache__/
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Local Netlify folder
+.netlify
+
+# Claude Code local state
+.claude/
+
+# Ad-hoc local scratch scripts
+/test.py

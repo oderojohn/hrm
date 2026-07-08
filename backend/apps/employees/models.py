@@ -1,23 +1,22 @@
 from django.conf import settings
 from django.db import models
-from django.utils import timezone
 
 from apps.core.models import BaseModel
 
+EMPLOYEE_NUMBER_PREFIX = "EMBO"
+
 
 def generate_employee_number():
-    year = timezone.now().year
-    prefix = f"NX{year}"
     last = (
-        Employee.all_objects.filter(employee_number__startswith=prefix)
+        Employee.all_objects.filter(employee_number__startswith=EMPLOYEE_NUMBER_PREFIX)
         .order_by("-employee_number")
         .first()
     )
-    if last and last.employee_number[len(prefix):].isdigit():
-        seq = int(last.employee_number[len(prefix):]) + 1
+    if last and last.employee_number[len(EMPLOYEE_NUMBER_PREFIX):].isdigit():
+        seq = int(last.employee_number[len(EMPLOYEE_NUMBER_PREFIX):]) + 1
     else:
         seq = 1
-    return f"{prefix}{seq:04d}"
+    return f"{EMPLOYEE_NUMBER_PREFIX}{seq:03d}"
 
 
 class Employee(BaseModel):

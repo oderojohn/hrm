@@ -14,6 +14,7 @@ import { NotificationsPage } from "./pages/NotificationsPage";
 import { UsersPage } from "./pages/UsersPage";
 import { OrganizationPage } from "./pages/OrganizationPage";
 import { SystemSettingsPage } from "./pages/SystemSettingsPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { AppLayout } from "./components/layout/AppLayout";
 import { ProtectedRoute, RoleRoute } from "./routes/ProtectedRoute";
@@ -31,7 +32,6 @@ const UNBUILT_PATHS = [
   "/helpdesk",
   "/disciplinary",
   "/exit-management",
-  "/reports",
 ];
 
 function App() {
@@ -58,6 +58,7 @@ function App() {
 
           <Route element={<RoleRoute roles={["SUPER_ADMIN", "HR_MANAGER", "DEPARTMENT_MANAGER"]} />}>
             <Route path="/organization" element={<OrganizationPage />} />
+            <Route path="/reports" element={<ReportsPage />} />
           </Route>
 
           <Route element={<RoleRoute roles={["SUPER_ADMIN"]} />}>

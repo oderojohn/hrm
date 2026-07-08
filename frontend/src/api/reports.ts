@@ -1,4 +1,4 @@
-import { apiClient } from "./client";
+import { apiClient, API_BASE_URL } from "./client";
 
 export interface ManagementDashboard {
   total_employees: number;
@@ -37,4 +37,54 @@ export type DashboardResponse = ManagementDashboard | PersonalDashboard;
 export async function fetchDashboard(): Promise<DashboardResponse> {
   const { data } = await apiClient.get<DashboardResponse>("/reports/dashboard/");
   return data;
+}
+
+export interface ReportQueryParams {
+  period?: "week" | "month";
+  start?: string;
+  end?: string;
+  department?: number;
+}
+
+export interface ReportPreview {
+  summary: { count: number };
+  results: Array<Record<string, string | number | boolean | null>>;
+}
+
+function toStringRecord(params?: ReportQueryParams): Record<string, string> {
+  if (!params) return {};
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined) as [string, string | number][];
+  return Object.fromEntries(entries.map(([k, v]) => [k, String(v)]));
+}
+
+function reportUrl(path: string, format: "csv" | "xlsx" | "pdf", params?: ReportQueryParams) {
+  const query = new URLSearchParams({ format, ...toStringRecord(params) });
+  return `${API_BASE_URL}${path}?${query.toString()}`;
+}
+
+export async function fetchAttendanceReport(params?: ReportQueryParams) {
+  const { data } = await apiClient.get<ReportPreview>("/reports/attendance/", { params });
+  return data;
+}
+
+export function attendanceReportExportUrl(format: "csv" | "xlsx" | "pdf", params?: ReportQueryParams) {
+  return reportUrl("/reports/attendance/", format, params);
+}
+
+export async function fetchLateArrivalsReport(params?: ReportQueryParams) {
+  const { data } = await apiClient.get<ReportPreview>("/reports/attendance-late-arrivals/", { params });
+  return data;
+}
+
+export function lateArrivalsReportExportUrl(format: "csv" | "xlsx" | "pdf", params?: ReportQueryParams) {
+  return reportUrl("/reports/attendance-late-arrivals/", format, params);
+}
+
+export async function fetchAbsenteeismReport(params?: ReportQueryParams) {
+  const { data } = await apiClient.get<ReportPreview>("/reports/attendance-absenteeism/", { params });
+  return data;
+}
+
+export function absenteeismReportExportUrl(format: "csv" | "xlsx" | "pdf", params?: ReportQueryParams) {
+  return reportUrl("/reports/attendance-absenteeism/", format, params);
 }

@@ -3,8 +3,11 @@ from rest_framework.routers import DefaultRouter
 
 from apps.attendance.views import (
     AttendanceCorrectionRequestViewSet,
+    AttendanceDashboardView,
     AttendanceDeviceWebhookView,
     AttendanceRecordViewSet,
+    AttendanceSettingsView,
+    DailyAttendanceView,
     DeviceViewSet,
     PunchLogViewSet,
     QRTokenViewSet,
@@ -27,4 +30,7 @@ urlpatterns = [
     path("device-webhook/", AttendanceDeviceWebhookView.as_view(), name="attendance-device-webhook"),
     path("zkteco/sync/", ZKTecoSyncView.as_view(), name="zkteco-sync"),
     path("sync/push/", SyncPushView.as_view(), name="sync-push"),
+    path("dashboard/", AttendanceDashboardView.as_view(), name="attendance-dashboard"),
+    path("daily/", DailyAttendanceView.as_view(), name="attendance-daily"),
+    path("settings/", AttendanceSettingsView.as_view(), name="attendance-settings"),
 ] + router.urls

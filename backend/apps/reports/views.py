@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 
 from apps.assets.models import Asset
 from apps.attendance.models import AttendanceRecord, PunchLog
+from apps.attendance.utils import count_expected_working_days, is_expected_working_day
 from apps.communication.models import Announcement
 from apps.core.exports import export_queryset
 from apps.core.models import PublicHoliday
@@ -304,13 +305,7 @@ class AttendanceAnalyticsView(APIView):
             overtime_minutes += record.overtime_minutes
             daily.append({"date": record.date.isoformat(), "hours": hours, "is_late": record.is_late})
 
-        working_day_numbers = employee.work_shift.working_days if employee.work_shift else [1, 2, 3, 4, 5]
-        expected_days = 0
-        cursor = start
-        while cursor <= end:
-            if cursor.isoweekday() in working_day_numbers and cursor not in holiday_dates:
-                expected_days += 1
-            cursor += timedelta(days=1)
+        expected_days = count_expected_working_days(employee, start, end, holiday_dates)
 
         total_hours = round(total_seconds / 3600, 1)
 
@@ -398,6 +393,107 @@ class AttendanceReportView(BaseReportView):
             obj.device.name if obj.device else "",
             obj.is_late,
             obj.overtime_minutes,
+        ]
+
+
+class LateArrivalsReportView(BaseReportView):
+    export_headers = ["Employee No.", "Employee", "Department", "Date", "Clock In", "Shift", "Minutes Late"]
+    base_filename = "late_arrivals_report"
+
+    def get_queryset(self, request):
+        start, end, _ = resolve_period(request)
+        employees = _scoped_employees(request.user)
+        department_param = request.query_params.get("department")
+        if department_param:
+            employees = employees.filter(department_id=department_param)
+        qs = (
+            AttendanceRecord.objects.filter(
+                employee__in=employees, date__gte=start, date__lte=end, is_late=True
+            )
+            .select_related("employee", "employee__department", "employee__work_shift")
+            .order_by("-date")
+        )
+        return qs
+
+    def row(self, obj):
+        shift = obj.employee.work_shift
+        minutes_late = None
+        if shift and obj.clock_in:
+            shift_start = timezone.make_aware(timezone.datetime.combine(obj.date, shift.start_time))
+            minutes_late = max(
+                int((obj.clock_in - shift_start).total_seconds() / 60) - shift.grace_period_minutes, 0
+            )
+        return [
+            obj.employee.employee_number,
+            obj.employee.full_name,
+            obj.employee.department.name if obj.employee.department else "",
+            obj.date,
+            obj.clock_in,
+            shift.name if shift else "",
+            minutes_late,
+        ]
+
+
+class AbsenteeismReportView(BaseReportView):
+    """Enumerates (employee, date) pairs where an employee had no attendance
+    record and no approved leave on a day they were expected to work — the
+    same expected-working-day rule AttendanceAnalyticsView uses, just listed
+    out per-date instead of summarized into a single absent_days count.
+    """
+
+    export_headers = ["Employee No.", "Employee", "Department", "Date"]
+    base_filename = "absenteeism_report"
+
+    def get_queryset(self, request):
+        start, end, _ = resolve_period(request)
+        employees = _scoped_employees(request.user).filter(
+            employment_status=Employee.EmploymentStatus.ACTIVE
+        )
+        department_param = request.query_params.get("department")
+        if department_param:
+            employees = employees.filter(department_id=department_param)
+        employees = employees.select_related("department", "work_shift")
+
+        holiday_dates = set(
+            PublicHoliday.objects.filter(date__gte=start, date__lte=end).values_list("date", flat=True)
+        )
+
+        rows = []
+        for employee in employees:
+            present_dates = set(
+                AttendanceRecord.objects.filter(
+                    employee=employee, date__gte=start, date__lte=end, clock_in__isnull=False
+                ).values_list("date", flat=True)
+            )
+            leave_ranges = list(
+                LeaveRequest.objects.filter(
+                    employee=employee,
+                    status=LeaveRequest.Status.APPROVED,
+                    start_date__lte=end,
+                    end_date__gte=start,
+                ).values_list("start_date", "end_date")
+            )
+            cursor = start
+            while cursor <= end:
+                if (
+                    cursor not in present_dates
+                    and is_expected_working_day(employee, cursor, holiday_dates)
+                    and not any(s <= cursor <= e for s, e in leave_ranges)
+                ):
+                    rows.append((employee, cursor))
+                cursor += timedelta(days=1)
+        return rows
+
+    def summarize(self, queryset):
+        return {"count": len(queryset)}
+
+    def row(self, obj):
+        employee, day = obj
+        return [
+            employee.employee_number,
+            employee.full_name,
+            employee.department.name if employee.department else "",
+            day,
         ]
 
 

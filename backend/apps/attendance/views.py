@@ -1,4 +1,5 @@
 import secrets
+from datetime import date
 from types import SimpleNamespace
 
 import django_filters
@@ -10,10 +11,12 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.attendance import notifications
 from apps.attendance.authentication import SyncAgentAuthentication
 from apps.attendance.models import (
     AttendanceCorrectionRequest,
     AttendanceRecord,
+    AttendanceSettings,
     Device,
     PunchLog,
     QRToken,
@@ -24,6 +27,7 @@ from apps.attendance.permissions import IsSyncAgent
 from apps.attendance.serializers import (
     AttendanceCorrectionRequestSerializer,
     AttendanceRecordSerializer,
+    AttendanceSettingsSerializer,
     DeviceSerializer,
     PunchLogSerializer,
     QRTokenSerializer,
@@ -32,8 +36,10 @@ from apps.attendance.serializers import (
 )
 from apps.attendance.utils import evaluate_clock_in as _evaluate_clock_in
 from apps.attendance.utils import evaluate_clock_out as _evaluate_clock_out
+from apps.attendance.utils import is_expected_working_day
+from apps.core.exports import export_queryset
 from apps.core.mixins import AuditLogMixin, ExportMixin
-from apps.core.models import AuditLog
+from apps.core.models import AuditLog, PublicHoliday
 from apps.core.permissions import IsHRManagerOrAbove, IsSuperAdmin
 from apps.employees.models import Employee
 
@@ -83,6 +89,184 @@ class AttendanceRecordViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet)
             obj.is_late,
             obj.overtime_minutes,
         ]
+
+
+class AttendanceDashboardView(APIView):
+    """Attendance-specific dashboard counts + a recent-activity feed — kept
+    separate from apps.reports.views.DashboardView (the company-wide one)
+    since this module wants late-arrivals/early-departures tiles and a
+    punch-level activity feed that the general dashboard has no room for.
+    """
+
+    permission_classes = [IsHRManagerOrAbove]
+
+    def get(self, request):
+        from apps.leave.models import LeaveRequest
+
+        today = timezone.now().date()
+        employees = Employee.objects.filter(employment_status=Employee.EmploymentStatus.ACTIVE)
+        active_ids = employees.values_list("id", flat=True)
+
+        present_today = AttendanceRecord.objects.filter(
+            employee_id__in=active_ids, date=today, clock_in__isnull=False
+        ).count()
+        on_leave_today = LeaveRequest.objects.filter(
+            employee_id__in=active_ids,
+            status=LeaveRequest.Status.APPROVED,
+            start_date__lte=today,
+            end_date__gte=today,
+        ).count()
+        absent_today = max(employees.count() - present_today - on_leave_today, 0)
+        late_today = AttendanceRecord.objects.filter(
+            employee_id__in=active_ids, date=today, is_late=True
+        ).count()
+        early_departures_today = AttendanceRecord.objects.filter(
+            employee_id__in=active_ids, date=today, is_early_departure=True
+        ).count()
+
+        recent_activity = [
+            {
+                "employee_name": p.employee.full_name,
+                "event": p.event,
+                "timestamp": p.timestamp,
+                "device_name": p.device.name if p.device else None,
+            }
+            for p in PunchLog.objects.select_related("employee", "device").order_by("-timestamp")[:15]
+        ]
+
+        return Response(
+            {
+                "total_employees": employees.count(),
+                "present_today": present_today,
+                "absent_today": absent_today,
+                "on_leave_today": on_leave_today,
+                "late_arrivals_today": late_today,
+                "early_departures_today": early_departures_today,
+                "recent_activity": recent_activity,
+            }
+        )
+
+
+class DailyAttendanceView(APIView):
+    """Roster-based daily attendance: one row per active employee for a given
+    date (default today), including employees who are Absent or On Leave —
+    unlike AttendanceRecordViewSet, which only returns rows that already
+    exist for employees who actually punched that day.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.leave.models import LeaveRequest
+        from apps.reports.views import _scoped_employees
+
+        raw_date = request.query_params.get("date")
+        day = date.fromisoformat(raw_date) if raw_date else timezone.now().date()
+
+        employees = _scoped_employees(request.user).filter(
+            employment_status=Employee.EmploymentStatus.ACTIVE
+        )
+        department_param = request.query_params.get("department")
+        branch_param = request.query_params.get("branch")
+        employee_param = request.query_params.get("employee")
+        if department_param:
+            employees = employees.filter(department_id=department_param)
+        if branch_param:
+            employees = employees.filter(branch_id=branch_param)
+        if employee_param:
+            employees = employees.filter(id=employee_param)
+        employees = employees.select_related("department", "work_shift")
+
+        records = {
+            r.employee_id: r for r in AttendanceRecord.objects.filter(employee__in=employees, date=day)
+        }
+        on_leave_ids = set(
+            LeaveRequest.objects.filter(
+                employee__in=employees,
+                status=LeaveRequest.Status.APPROVED,
+                start_date__lte=day,
+                end_date__gte=day,
+            ).values_list("employee_id", flat=True)
+        )
+        holiday_dates = {day} if PublicHoliday.objects.filter(date=day).exists() else set()
+
+        rows = []
+        for employee in employees:
+            record = records.get(employee.id)
+            if employee.id in on_leave_ids:
+                status_label = "ON_LEAVE"
+            elif record and record.clock_in:
+                status_label = "LATE" if record.is_late else "PRESENT"
+            elif is_expected_working_day(employee, day, holiday_dates):
+                status_label = "ABSENT"
+            else:
+                status_label = "OFF"
+
+            working_hours = None
+            if record and record.clock_in and record.clock_out:
+                working_hours = round((record.clock_out - record.clock_in).total_seconds() / 3600, 2)
+
+            rows.append(
+                {
+                    "employee_id": employee.id,
+                    "employee_number": employee.employee_number,
+                    "employee_name": employee.full_name,
+                    "department_name": employee.department.name if employee.department else None,
+                    "shift_name": employee.work_shift.name if employee.work_shift else None,
+                    "clock_in": record.clock_in if record else None,
+                    "clock_out": record.clock_out if record else None,
+                    "working_hours": working_hours,
+                    "status": status_label,
+                }
+            )
+
+        export_headers = [
+            "Employee No.",
+            "Employee",
+            "Department",
+            "Shift",
+            "Clock In",
+            "Clock Out",
+            "Working Hours",
+            "Status",
+        ]
+
+        def export_row(r):
+            return [
+                r["employee_number"],
+                r["employee_name"],
+                r["department_name"] or "",
+                r["shift_name"] or "",
+                r["clock_in"],
+                r["clock_out"],
+                r["working_hours"],
+                r["status"],
+            ]
+
+        export_response = export_queryset(request, rows, export_headers, export_row, "daily_attendance")
+        if export_response is not None:
+            return export_response
+
+        return Response({"date": day.isoformat(), "count": len(rows), "results": rows})
+
+
+class AttendanceSettingsView(APIView):
+    """Singleton company-wide attendance settings — see AttendanceSettings."""
+
+    def get_permissions(self):
+        if self.request.method in ("PATCH", "PUT"):
+            return [IsHRManagerOrAbove()]
+        return [IsAuthenticated()]
+
+    def get(self, request):
+        return Response(AttendanceSettingsSerializer(AttendanceSettings.get_solo()).data)
+
+    def patch(self, request):
+        instance = AttendanceSettings.get_solo()
+        serializer = AttendanceSettingsSerializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class DeviceViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
@@ -348,7 +532,19 @@ class AttendanceCorrectionRequestViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = AttendanceCorrectionRequest.objects.select_related("employee", "reviewed_by")
+        qs = AttendanceCorrectionRequest.objects.select_related("employee", "reviewed_by", "supervisor")
+
+        # Any employee who is someone's reporting_manager gets an approval
+        # inbox here, regardless of role — "Supervisor" isn't a role, it's
+        # whoever a correction's employee reports to.
+        if self.request.query_params.get("pending_supervisor_approval") == "true":
+            own = getattr(user, "employee", None)
+            return (
+                qs.filter(supervisor=own, supervisor_status=AttendanceCorrectionRequest.SupervisorStatus.PENDING)
+                if own
+                else qs.none()
+            )
+
         if user.role in (user.Role.SUPER_ADMIN, user.Role.HR_MANAGER):
             return qs
         own = getattr(user, "employee", None)
@@ -358,11 +554,63 @@ class AttendanceCorrectionRequestViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         employee = getattr(self.request.user, "employee", None)
-        serializer.save(employee=employee)
+        supervisor = employee.reporting_manager if employee else None
+        correction = serializer.save(
+            employee=employee,
+            supervisor=supervisor,
+            supervisor_status=(
+                AttendanceCorrectionRequest.SupervisorStatus.PENDING
+                if supervisor
+                else AttendanceCorrectionRequest.SupervisorStatus.SKIPPED
+            ),
+        )
+        notifications.notify_submitted(correction)
+
+    def _can_act_as_supervisor(self, request, correction):
+        if request.user.role == request.user.Role.SUPER_ADMIN:
+            return True
+        actor = getattr(request.user, "employee", None)
+        return bool(actor and correction.supervisor_id == actor.id)
+
+    @action(detail=True, methods=["post"], url_path="supervisor-approve")
+    def supervisor_approve(self, request, pk=None):
+        correction = self.get_object()
+        if not self._can_act_as_supervisor(request, correction):
+            return Response({"detail": "Not authorized to act on this correction."}, status=403)
+        if correction.supervisor_status != AttendanceCorrectionRequest.SupervisorStatus.PENDING:
+            return Response({"detail": "This correction is not awaiting supervisor approval."}, status=400)
+
+        correction.supervisor_status = AttendanceCorrectionRequest.SupervisorStatus.APPROVED
+        correction.supervisor_reviewed_at = timezone.now()
+        correction.supervisor_comment = request.data.get("comment", "")
+        correction.save()
+        notifications.notify_supervisor_approved(correction)
+        return Response(AttendanceCorrectionRequestSerializer(correction).data)
+
+    @action(detail=True, methods=["post"], url_path="supervisor-reject")
+    def supervisor_reject(self, request, pk=None):
+        correction = self.get_object()
+        if not self._can_act_as_supervisor(request, correction):
+            return Response({"detail": "Not authorized to act on this correction."}, status=403)
+        if correction.supervisor_status != AttendanceCorrectionRequest.SupervisorStatus.PENDING:
+            return Response({"detail": "This correction is not awaiting supervisor approval."}, status=400)
+
+        # Rejection at the supervisor stage is terminal — it never reaches HR.
+        correction.supervisor_status = AttendanceCorrectionRequest.SupervisorStatus.REJECTED
+        correction.supervisor_reviewed_at = timezone.now()
+        correction.supervisor_comment = request.data.get("comment", "")
+        correction.status = AttendanceCorrectionRequest.Status.REJECTED
+        correction.reviewed_at = timezone.now()
+        correction.save()
+        notifications.notify_rejected(correction, stage="supervisor")
+        return Response(AttendanceCorrectionRequestSerializer(correction).data)
 
     @action(detail=True, methods=["post"], permission_classes=[IsHRManagerOrAbove])
     def approve(self, request, pk=None):
         correction = self.get_object()
+        if correction.supervisor_status == AttendanceCorrectionRequest.SupervisorStatus.PENDING:
+            return Response({"detail": "Awaiting supervisor approval first."}, status=400)
+
         record, _ = AttendanceRecord.objects.get_or_create(
             employee=correction.employee, date=correction.date
         )
@@ -378,16 +626,21 @@ class AttendanceCorrectionRequestViewSet(AuditLogMixin, viewsets.ModelViewSet):
         correction.review_comment = request.data.get("comment", "")
         correction.attendance = record
         correction.save()
+        notifications.notify_approved(correction)
         return Response(AttendanceCorrectionRequestSerializer(correction).data)
 
     @action(detail=True, methods=["post"], permission_classes=[IsHRManagerOrAbove])
     def reject(self, request, pk=None):
         correction = self.get_object()
+        if correction.supervisor_status == AttendanceCorrectionRequest.SupervisorStatus.PENDING:
+            return Response({"detail": "Awaiting supervisor approval first."}, status=400)
+
         correction.status = AttendanceCorrectionRequest.Status.REJECTED
         correction.reviewed_by = getattr(request.user, "employee", None)
         correction.reviewed_at = timezone.now()
         correction.review_comment = request.data.get("comment", "")
         correction.save()
+        notifications.notify_rejected(correction, stage="hr")
         return Response(AttendanceCorrectionRequestSerializer(correction).data)
 
 

@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.reports.views import (
+    AbsenteeismReportView,
     AssetReportView,
     AttendanceAnalyticsView,
     AttendanceReportView,
@@ -10,6 +11,7 @@ from apps.reports.views import (
     DisciplinaryReportView,
     EmployeeAttendanceDetailView,
     EmployeeReportView,
+    LateArrivalsReportView,
     LeaveReportView,
     PerformanceReportView,
     RecruitmentReportView,
@@ -22,6 +24,8 @@ urlpatterns = [
     path("employees/", EmployeeReportView.as_view(), name="report-employees"),
     path("attendance/", AttendanceReportView.as_view(), name="report-attendance"),
     path("attendance-analytics/", AttendanceAnalyticsView.as_view(), name="report-attendance-analytics"),
+    path("attendance-late-arrivals/", LateArrivalsReportView.as_view(), name="report-attendance-late-arrivals"),
+    path("attendance-absenteeism/", AbsenteeismReportView.as_view(), name="report-attendance-absenteeism"),
     path(
         "attendance/employee/<int:employee_id>/",
         EmployeeAttendanceDetailView.as_view(),

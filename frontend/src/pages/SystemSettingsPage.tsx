@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Plus, Power } from "lucide-react";
+import { CalendarPlus, KeyRound, Plus, Power, Trash2 } from "lucide-react";
 import {
   syncAgentsApi,
   syncEventsApi,
@@ -9,6 +9,8 @@ import {
   type SyncAgent,
   type SyncEvent,
 } from "../api/sync";
+import { fetchAttendanceSettings, updateAttendanceSettings } from "../api/attendance";
+import { publicHolidaysApi, type PublicHoliday } from "../api/core";
 import { branchesApi } from "../api/organization";
 import { extractErrorMessage } from "../api/client";
 import { Tabs } from "../components/ui/Tabs";
@@ -17,11 +19,14 @@ import { Dialog } from "../components/ui/Dialog";
 import { Input } from "../components/ui/Input";
 import { Label } from "../components/ui/Label";
 import { Select } from "../components/ui/Select";
+import { ResourceForm } from "../components/resource/ResourceForm";
+import type { FormField } from "../components/resource/types";
 import { DataTable } from "../components/resource/DataTable";
 import { StatusBadge } from "../components/ui/Badge";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { CredentialRevealDialog } from "../components/CredentialRevealDialog";
 import { FullPageSpinner } from "../components/ui/Spinner";
-import { formatDateTime } from "../lib/utils";
+import { formatDate, formatDateTime } from "../lib/utils";
 
 export function SystemSettingsPage() {
   return (
@@ -34,8 +39,183 @@ export function SystemSettingsPage() {
         tabs={[
           { key: "agents", label: "Sync Agents", content: <SyncAgentsTab /> },
           { key: "log", label: "Sync Activity Log", content: <SyncActivityLogTab /> },
+          { key: "attendance", label: "Attendance Settings", content: <AttendanceSettingsTab /> },
         ]}
       />
+    </div>
+  );
+}
+
+const WEEKDAY_LABELS = [
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+  { value: 7, label: "Sun" },
+];
+
+function AttendanceSettingsTab() {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery({ queryKey: ["attendance-settings"], queryFn: fetchAttendanceSettings });
+  const [weekendDays, setWeekendDays] = useState<number[]>([]);
+  const [holidayDialogOpen, setHolidayDialogOpen] = useState(false);
+  const [editingHoliday, setEditingHoliday] = useState<PublicHoliday | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (data) setWeekendDays(data.weekend_days);
+  }, [data]);
+
+  const saveWeekendDays = useMutation({
+    mutationFn: (days: number[]) => updateAttendanceSettings({ weekend_days: days }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["attendance-settings"] }),
+  });
+
+  const toggleDay = (day: number) => {
+    const next = weekendDays.includes(day) ? weekendDays.filter((d) => d !== day) : [...weekendDays, day];
+    setWeekendDays(next);
+    saveWeekendDays.mutate(next);
+  };
+
+  const { data: holidays, isLoading: holidaysLoading } = useQuery({
+    queryKey: ["public-holidays"],
+    queryFn: () => publicHolidaysApi.list({ page_size: 100, ordering: "date" }),
+  });
+
+  const { data: branches } = useQuery({ queryKey: ["branches-all"], queryFn: () => branchesApi.list({ page_size: 200 }) });
+
+  const invalidateHolidays = () => queryClient.invalidateQueries({ queryKey: ["public-holidays"] });
+
+  const saveHoliday = useMutation({
+    mutationFn: (values: Partial<PublicHoliday>) =>
+      editingHoliday ? publicHolidaysApi.update(editingHoliday.id, values) : publicHolidaysApi.create(values),
+    onSuccess: () => {
+      invalidateHolidays();
+      setHolidayDialogOpen(false);
+      setEditingHoliday(null);
+      setFormError(null);
+    },
+    onError: (err) => setFormError(extractErrorMessage(err)),
+  });
+
+  const deleteHoliday = useMutation({
+    mutationFn: (id: number) => publicHolidaysApi.remove(id),
+    onSuccess: invalidateHolidays,
+  });
+
+  const holidayFields: FormField[] = [
+    { name: "name", label: "Holiday Name", type: "text", required: true },
+    { name: "date", label: "Date", type: "date", required: true },
+    {
+      name: "branch",
+      label: "Branch (leave blank for company-wide)",
+      type: "select",
+      options: branches?.results.map((b) => ({ value: b.id, label: b.name })) ?? [],
+    },
+    { name: "is_recurring_annually", label: "Repeats every year", type: "checkbox" },
+    { name: "description", label: "Description", type: "textarea" },
+  ];
+
+  if (isLoading) return <FullPageSpinner />;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Weekend Days</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 px-4 pb-4 pt-0">
+          <p className="text-xs text-slate-500">
+            Fallback non-working days for employees with no work shift assigned. Employees with a shift use its own
+            working-days setting instead (Organization → Shifts).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {WEEKDAY_LABELS.map((d) => (
+              <button
+                key={d.value}
+                onClick={() => toggleDay(d.value)}
+                className={
+                  weekendDays.includes(d.value)
+                    ? "rounded-md border border-brand-500 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-700"
+                    : "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+                }
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Public Holidays</CardTitle>
+          <Button
+            size="sm"
+            onClick={() => {
+              setEditingHoliday(null);
+              setHolidayDialogOpen(true);
+            }}
+          >
+            <CalendarPlus className="h-3.5 w-3.5" /> Add Holiday
+          </Button>
+        </CardHeader>
+        <CardContent className="px-0 pb-0 pt-0">
+          <DataTable
+            columns={[
+              { key: "name", header: "Name" },
+              { key: "date", header: "Date", render: (r) => formatDate(r.date) },
+              { key: "is_recurring_annually", header: "Recurring", render: (r) => (r.is_recurring_annually ? "Yes" : "No") },
+              {
+                key: "actions",
+                header: "",
+                render: (r) => (
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingHoliday(r);
+                        setHolidayDialogOpen(true);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => deleteHoliday.mutate(r.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ),
+              },
+            ]}
+            data={holidays?.results ?? []}
+            isLoading={holidaysLoading}
+            canEdit={false}
+            canDelete={false}
+          />
+        </CardContent>
+      </Card>
+
+      <Dialog
+        open={holidayDialogOpen}
+        onClose={() => {
+          setHolidayDialogOpen(false);
+          setEditingHoliday(null);
+          setFormError(null);
+        }}
+        title={editingHoliday ? "Edit Holiday" : "Add Holiday"}
+      >
+        <ResourceForm
+          fields={holidayFields}
+          defaultValues={editingHoliday ? { ...editingHoliday } : undefined}
+          submitting={saveHoliday.isPending}
+          errorMessage={formError}
+          onCancel={() => setHolidayDialogOpen(false)}
+          onSubmit={(values) => saveHoliday.mutate(values as Partial<PublicHoliday>)}
+        />
+      </Dialog>
     </div>
   );
 }

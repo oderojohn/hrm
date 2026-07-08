@@ -5,11 +5,16 @@ export interface AttendanceRecord {
   id: number;
   employee: number;
   employee_name: string;
+  employee_number: string;
+  department_name: string | null;
+  shift_name: string | null;
   device: number | null;
   device_name: string | null;
   date: string;
   clock_in: string | null;
   clock_out: string | null;
+  working_hours: number | null;
+  status: "PRESENT" | "LATE" | "ABSENT";
   method: string;
   is_late: boolean;
   is_early_departure: boolean;
@@ -51,9 +56,47 @@ export interface AttendanceCorrectionRequest {
   requested_clock_in: string | null;
   requested_clock_out: string | null;
   reason: string;
+  supervisor: number | null;
+  supervisor_name: string | null;
+  supervisor_status: "PENDING" | "APPROVED" | "REJECTED" | "SKIPPED";
+  supervisor_reviewed_at: string | null;
+  supervisor_comment: string;
+  current_stage: "SUPERVISOR" | "HR" | "DONE";
   status: "PENDING" | "APPROVED" | "REJECTED";
   reviewed_by_name: string | null;
   review_comment: string;
+}
+
+export interface AttendanceDashboard {
+  total_employees: number;
+  present_today: number;
+  absent_today: number;
+  on_leave_today: number;
+  late_arrivals_today: number;
+  early_departures_today: number;
+  recent_activity: Array<{
+    employee_name: string;
+    event: "IN" | "OUT" | "UNKNOWN";
+    timestamp: string;
+    device_name: string | null;
+  }>;
+}
+
+export interface DailyAttendanceRow {
+  employee_id: number;
+  employee_number: string;
+  employee_name: string;
+  department_name: string | null;
+  shift_name: string | null;
+  clock_in: string | null;
+  clock_out: string | null;
+  working_hours: number | null;
+  status: "PRESENT" | "LATE" | "ABSENT" | "ON_LEAVE" | "OFF";
+}
+
+export interface AttendanceSettings {
+  id: number;
+  weekend_days: number[];
 }
 
 export interface AttendanceAnalyticsEntry {
@@ -204,5 +247,57 @@ export async function rejectAttendanceCorrection(id: number, comment?: string) {
     `/attendance/corrections/${id}/reject/`,
     { comment }
   );
+  return data;
+}
+
+export async function supervisorApproveCorrection(id: number, comment?: string) {
+  const { data } = await apiClient.post<AttendanceCorrectionRequest>(
+    `/attendance/corrections/${id}/supervisor-approve/`,
+    { comment }
+  );
+  return data;
+}
+
+export async function supervisorRejectCorrection(id: number, comment?: string) {
+  const { data } = await apiClient.post<AttendanceCorrectionRequest>(
+    `/attendance/corrections/${id}/supervisor-reject/`,
+    { comment }
+  );
+  return data;
+}
+
+export async function fetchAttendanceDashboard() {
+  const { data } = await apiClient.get<AttendanceDashboard>("/attendance/dashboard/");
+  return data;
+}
+
+export interface DailyAttendanceParams {
+  date?: string;
+  department?: number;
+  branch?: number;
+  employee?: number;
+  [key: string]: string | number | boolean | undefined;
+}
+
+export async function fetchDailyAttendance(params?: DailyAttendanceParams) {
+  const { data } = await apiClient.get<{ date: string; count: number; results: DailyAttendanceRow[] }>(
+    "/attendance/daily/",
+    { params }
+  );
+  return data;
+}
+
+export function dailyAttendanceExportUrl(format: "csv" | "xlsx" | "pdf", params?: DailyAttendanceParams) {
+  const query = new URLSearchParams({ format, ...toStringRecord(params) });
+  return `${API_BASE_URL}/attendance/daily/?${query.toString()}`;
+}
+
+export async function fetchAttendanceSettings() {
+  const { data } = await apiClient.get<AttendanceSettings>("/attendance/settings/");
+  return data;
+}
+
+export async function updateAttendanceSettings(payload: Partial<AttendanceSettings>) {
+  const { data } = await apiClient.patch<AttendanceSettings>("/attendance/settings/", payload);
   return data;
 }

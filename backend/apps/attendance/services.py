@@ -171,20 +171,25 @@ def ingest_punches(punches, device=None):
     created, updated = 0, 0
     for (employee_id, day), timestamps in by_employee_day.items():
         employee = employees_by_day[(employee_id, day)]
-        first_punch = min(timestamps)
-        last_punch = max(timestamps)
+        batch_first = min(timestamps)
+        batch_last = max(timestamps)
 
         record, was_created = AttendanceRecord.objects.get_or_create(
             employee=employee, date=day, defaults={"method": AttendanceRecord.Method.BIOMETRIC}
         )
         record.method = AttendanceRecord.Method.BIOMETRIC
         record.device = device
-        if not record.clock_in or first_punch < record.clock_in:
-            record.clock_in = first_punch
-            evaluate_clock_in(record, employee, first_punch)
-        if len(timestamps) > 1 and (not record.clock_out or last_punch > record.clock_out):
-            record.clock_out = last_punch
-            evaluate_clock_out(record, employee, last_punch)
+        if not record.clock_in or batch_first < record.clock_in:
+            record.clock_in = batch_first
+            evaluate_clock_in(record, employee, batch_first)
+        # A punch later than the established clock-in is a clock-out candidate.
+        # This can't be gated on "more than one punch in *this* batch" — the
+        # local agent pushes incrementally, often one punch at a time, so a
+        # day's clock-out punch frequently arrives alone in its own batch,
+        # long after the clock-in punch was already synced and saved.
+        if batch_last != record.clock_in and (not record.clock_out or batch_last > record.clock_out):
+            record.clock_out = batch_last
+            evaluate_clock_out(record, employee, batch_last)
         record.save()
 
         created += int(was_created)

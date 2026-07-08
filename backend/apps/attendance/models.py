@@ -178,6 +178,12 @@ class AttendanceCorrectionRequest(BaseModel):
         APPROVED = "APPROVED", "Approved"
         REJECTED = "REJECTED", "Rejected"
 
+    class SupervisorStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+        SKIPPED = "SKIPPED", "Skipped"
+
     employee = models.ForeignKey(
         "employees.Employee", on_delete=models.CASCADE, related_name="correction_requests"
     )
@@ -192,6 +198,23 @@ class AttendanceCorrectionRequest(BaseModel):
     requested_clock_in = models.DateTimeField(null=True, blank=True)
     requested_clock_out = models.DateTimeField(null=True, blank=True)
     reason = models.TextField()
+    # Two-step approval: Employee -> Supervisor (employee.reporting_manager,
+    # resolved at submission time so history is stable even if the manager
+    # later changes) -> HR. `supervisor_status` defaults to SKIPPED so rows
+    # created before this workflow existed (and any created for an employee
+    # with no reporting_manager) go straight to the HR stage below.
+    supervisor = models.ForeignKey(
+        "employees.Employee",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="corrections_to_approve",
+    )
+    supervisor_status = models.CharField(
+        max_length=20, choices=SupervisorStatus.choices, default=SupervisorStatus.SKIPPED
+    )
+    supervisor_reviewed_at = models.DateTimeField(null=True, blank=True)
+    supervisor_comment = models.CharField(max_length=255, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     reviewed_by = models.ForeignKey(
         "employees.Employee",
@@ -208,6 +231,40 @@ class AttendanceCorrectionRequest(BaseModel):
 
     def __str__(self):
         return f"Correction for {self.employee} on {self.date}"
+
+    @property
+    def current_stage(self):
+        if self.status != self.Status.PENDING:
+            return "DONE"
+        if self.supervisor_status == self.SupervisorStatus.PENDING:
+            return "SUPERVISOR"
+        return "HR"
+
+
+class AttendanceSettings(models.Model):
+    """Effectively a singleton — one row holds company-wide attendance
+    defaults. Per-shift working_days/grace_period on WorkShift always win;
+    weekend_days here is only the fallback used for employees with no
+    work_shift assigned (previously silently treated as working every day).
+    """
+
+    weekend_days = models.JSONField(
+        default=list,
+        help_text="ISO weekday numbers (1=Mon..7=Sun) treated as non-working "
+        "for employees with no work shift assigned.",
+    )
+
+    class Meta:
+        verbose_name = "Attendance Settings"
+        verbose_name_plural = "Attendance Settings"
+
+    def __str__(self):
+        return "Attendance Settings"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1, defaults={"weekend_days": [6, 7]})
+        return obj
 
 
 class QRToken(BaseModel):
