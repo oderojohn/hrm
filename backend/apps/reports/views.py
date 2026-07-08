@@ -548,8 +548,7 @@ class AttendanceGridReportView(APIView):
         ).values_list("employee_id", "start_date", "end_date"):
             leaves_by_employee[employee_id].append((leave_start, leave_end))
 
-        def day_status(employee, day):
-            record = records_by_employee.get(employee.id, {}).get(day)
+        def day_status(employee, day, record):
             if any(s <= day <= e for s, e in leaves_by_employee.get(employee.id, [])):
                 return "LV"
             if record and record.clock_in:
@@ -558,20 +557,50 @@ class AttendanceGridReportView(APIView):
                 return "A"
             return "OFF"
 
-        headers = ["Employee No.", "Employee", "Department"] + [d.strftime("%d %b") for d in dates]
+        # The grid always shows one status code per day EXCEPT on days the
+        # employee was actually present, where the chosen metric (clock-in
+        # time, clock-out time, or hours worked) is shown instead — there's
+        # nothing to show a clock-in time for on an absent/leave/off day.
+        metric = request.query_params.get("metric", "status")
+
+        def cell_value(employee, day):
+            record = records_by_employee.get(employee.id, {}).get(day)
+            status = day_status(employee, day, record)
+            if metric == "status" or status not in ("P", "L"):
+                return status
+            if metric == "clock_in":
+                return timezone.localtime(record.clock_in).strftime("%H:%M")
+            if metric == "clock_out":
+                return timezone.localtime(record.clock_out).strftime("%H:%M") if record.clock_out else status
+            if metric == "working_hours":
+                if record.clock_out:
+                    return str(round((record.clock_out - record.clock_in).total_seconds() / 3600, 1))
+                return status
+            return status
+
+        metric_labels = {
+            "status": "Attendance Status",
+            "clock_in": "Clock In Times",
+            "clock_out": "Clock Out Times",
+            "working_hours": "Working Hours",
+        }
+        date_header_suffix = "" if metric == "status" else f" {metric_labels.get(metric, '')}"
+        headers = ["Employee No.", "Employee", "Department"] + [
+            f"{d.strftime('%d %b')}{date_header_suffix}" for d in dates
+        ]
 
         def row(employee):
             return [
                 employee.employee_number,
                 employee.full_name,
                 employee.department.name if employee.department else "",
-                *[day_status(employee, d) for d in dates],
+                *[cell_value(employee, d) for d in dates],
             ]
 
         rows = [row(e) for e in employees]
 
         fmt = request.query_params.get("format", "").lower()
-        base_filename = "attendance_register"
+        base_filename = f"attendance_register_{metric}"
         if fmt == "csv":
             return export_csv(rows, headers, f"{base_filename}.csv")
         if fmt == "xlsx":
@@ -585,6 +614,7 @@ class AttendanceGridReportView(APIView):
                 "start": start.isoformat(),
                 "end": end.isoformat(),
                 "dates": [d.isoformat() for d in dates],
+                "metric": metric,
                 "legend": self.STATUS_LABELS,
                 "headers": headers,
                 "results": rows[:50],

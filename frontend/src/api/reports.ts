@@ -91,6 +91,8 @@ export function absenteeismReportExportUrl(format: "csv" | "xlsx" | "pdf", param
 
 export interface AttendanceGridReportParams extends ReportQueryParams {
   employee?: number;
+  branch?: number;
+  metric?: "status" | "clock_in" | "clock_out" | "working_hours";
 }
 
 export interface AttendanceGridReport {

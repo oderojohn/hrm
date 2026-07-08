@@ -14,7 +14,7 @@ import {
 } from "../api/reports";
 import { downloadExport } from "../api/resource";
 import { fetchAllEmployeesForSelect } from "../api/employees";
-import { departmentsApi } from "../api/organization";
+import { branchesApi, departmentsApi } from "../api/organization";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Select } from "../components/ui/Select";
 import { Button } from "../components/ui/Button";
@@ -101,11 +101,21 @@ const STATUS_CELL_CLASS: Record<string, string> = {
   OFF: "bg-slate-100 text-slate-500",
 };
 
+const METRIC_OPTIONS: { value: "status" | "clock_in" | "clock_out" | "working_hours"; label: string }[] = [
+  { value: "status", label: "Attendance Status (Present/Late/Absent/Leave)" },
+  { value: "clock_in", label: "Clock In Times" },
+  { value: "clock_out", label: "Clock Out Times" },
+  { value: "working_hours", label: "Working Hours" },
+];
+
 function AttendanceRegisterCard() {
   const [period, setPeriod] = useState<"week" | "month">("month");
+  const [branchId, setBranchId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [employeeId, setEmployeeId] = useState("");
+  const [metric, setMetric] = useState<"status" | "clock_in" | "clock_out" | "working_hours">("status");
 
+  const { data: branches } = useQuery({ queryKey: ["branches-all"], queryFn: () => branchesApi.list({ page_size: 200 }) });
   const { data: departments } = useQuery({
     queryKey: ["departments-all"],
     queryFn: () => departmentsApi.list({ page_size: 200 }),
@@ -114,6 +124,8 @@ function AttendanceRegisterCard() {
 
   const params = {
     period,
+    metric,
+    branch: branchId ? Number(branchId) : undefined,
     department: departmentId ? Number(departmentId) : undefined,
     employee: employeeId ? Number(employeeId) : undefined,
   };
@@ -127,21 +139,29 @@ function AttendanceRegisterCard() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <CheckSquare className="h-4 w-4 text-slate-400" /> Attendance Register — Present / Absent
+          <CheckSquare className="h-4 w-4 text-slate-400" /> Attendance Register
         </CardTitle>
         <ExportButtonGroup
-          onExport={(format) => downloadExport(attendanceGridReportExportUrl(format, params), `attendance-register.${format}`)}
+          onExport={(format) => downloadExport(attendanceGridReportExportUrl(format, params), `attendance-register-${metric}.${format}`)}
         />
       </CardHeader>
       <CardContent className="space-y-3 px-4 pb-4 pt-0">
         <p className="text-xs text-slate-500">
-          One row per employee, one column per day — scope it to a single employee, a department, or leave both
-          blank for the whole company.
+          Employees down the left, dates across the top. Scope it to a branch, a department, a single employee, or
+          leave all blank for the whole company — then choose what each date column should show before exporting.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={period} onChange={(e) => setPeriod(e.target.value as "week" | "month")} className="w-36">
             <option value="week">This Week</option>
             <option value="month">This Month</option>
+          </Select>
+          <Select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-full sm:w-40">
+            <option value="">All Branches</option>
+            {branches?.results.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
           </Select>
           <Select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className="w-full sm:w-48">
             <option value="">All Departments</option>
@@ -156,6 +176,17 @@ function AttendanceRegisterCard() {
             {employees?.map((e) => (
               <option key={e.id} value={e.id}>
                 {e.full_name}
+              </option>
+            ))}
+          </Select>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-500">Report shows, per date:</label>
+          <Select value={metric} onChange={(e) => setMetric(e.target.value as typeof metric)} className="w-full sm:w-72">
+            {METRIC_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
               </option>
             ))}
           </Select>
