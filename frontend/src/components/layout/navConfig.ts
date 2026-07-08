@@ -4,15 +4,6 @@ import {
   CalendarDays,
   Clock,
   Building2,
-  Briefcase,
-  TrendingUp,
-  GraduationCap,
-  Laptop,
-  FileText,
-  Megaphone,
-  LifeBuoy,
-  ShieldAlert,
-  LogOut as LogOutIcon,
   Settings,
   BarChart3,
   UserCog,
@@ -29,6 +20,12 @@ export interface NavItem {
   roles?: Role[];
 }
 
+// Modules not built yet (Recruitment, Performance, Training, Assets,
+// Documents, Announcements, Helpdesk, Disciplinary, Exit Management) are
+// deliberately left out of the sidebar rather than shown as "coming soon"
+// placeholders. Their routes still exist in App.tsx (redirecting to
+// NotFoundPage) as a graceful fallback for any old bookmarked links — add
+// the nav entry back here once a module is actually built.
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", path: "/", icon: LayoutDashboard },
   { label: "Notifications", path: "/notifications", icon: Bell },
@@ -42,15 +39,6 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Building2,
     roles: ["SUPER_ADMIN", "HR_MANAGER", "DEPARTMENT_MANAGER"],
   },
-  { label: "Recruitment", path: "/recruitment", icon: Briefcase, roles: ["SUPER_ADMIN", "HR_MANAGER"] },
-  { label: "Performance", path: "/performance", icon: TrendingUp },
-  { label: "Training", path: "/training", icon: GraduationCap },
-  { label: "Assets", path: "/assets", icon: Laptop, roles: ["SUPER_ADMIN", "HR_MANAGER"] },
-  { label: "Documents", path: "/documents", icon: FileText },
-  { label: "Announcements", path: "/announcements", icon: Megaphone },
-  { label: "Helpdesk", path: "/helpdesk", icon: LifeBuoy },
-  { label: "Disciplinary", path: "/disciplinary", icon: ShieldAlert },
-  { label: "Exit Management", path: "/exit-management", icon: LogOutIcon, roles: ["SUPER_ADMIN", "HR_MANAGER"] },
   { label: "Reports", path: "/reports", icon: BarChart3, roles: ["SUPER_ADMIN", "HR_MANAGER", "DEPARTMENT_MANAGER"] },
   { label: "Users", path: "/users", icon: UserCog, roles: ["SUPER_ADMIN"] },
   { label: "System Settings", path: "/settings", icon: Settings, roles: ["SUPER_ADMIN"] },
