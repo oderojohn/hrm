@@ -44,6 +44,7 @@ export interface WorkShift {
   break_duration_minutes: number;
   grace_period_minutes: number;
   working_days: number[];
+  is_flexible: boolean;
   is_active: boolean;
 }
 

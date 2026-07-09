@@ -33,18 +33,23 @@ def count_expected_working_days(employee, start, end, holiday_dates):
 
 def evaluate_clock_in(record, employee, when):
     shift = employee.work_shift
-    if shift:
+    if shift and not shift.is_flexible:
         shift_start = timezone.make_aware(
             timezone.datetime.combine(record.date, shift.start_time)
         )
         grace = timedelta(minutes=shift.grace_period_minutes)
         record.is_late = when > shift_start + grace
+    elif shift and shift.is_flexible:
+        record.is_late = False
 
 
 def evaluate_clock_out(record, employee, when):
     shift = employee.work_shift
-    if shift:
+    if shift and not shift.is_flexible:
         shift_end = timezone.make_aware(timezone.datetime.combine(record.date, shift.end_time))
         record.is_early_departure = when < shift_end
         if when > shift_end:
             record.overtime_minutes = int((when - shift_end).total_seconds() // 60)
+    elif shift and shift.is_flexible:
+        record.is_early_departure = False
+        record.overtime_minutes = 0

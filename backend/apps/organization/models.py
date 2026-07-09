@@ -84,6 +84,12 @@ class WorkShift(BaseModel):
         default=list,
         help_text="List of ISO weekday numbers this shift is active on, e.g. [1,2,3,4,5] for Mon-Fri.",
     )
+    is_flexible = models.BooleanField(
+        default=False,
+        help_text="No fixed hours — clock-ins/outs are never marked late or an early "
+        "departure, and no overtime is computed. start_time/end_time are ignored for "
+        "attendance evaluation (kept only for display) when this is on.",
+    )
     is_active = models.BooleanField(default=True)
 
     class Meta:

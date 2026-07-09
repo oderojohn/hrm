@@ -231,6 +231,11 @@ function WorkShiftsTab() {
       type: "checkbox-group",
       options: WEEKDAYS.map((w) => ({ label: w.label, value: w.value })),
     },
+    {
+      name: "is_flexible",
+      label: "Flexible hours — never mark late or early departure (e.g. 00:00–23:59 open shifts)",
+      type: "checkbox",
+    },
     { name: "is_active", label: "Active", type: "checkbox" },
   ];
 
@@ -256,6 +261,7 @@ function WorkShiftsTab() {
             header: "Working Days",
             render: (r) => r.working_days.map((d) => WEEKDAYS.find((w) => w.value === d)?.label ?? d).join(", "),
           },
+          { key: "is_flexible", header: "Flexible", render: (r) => (r.is_flexible ? <StatusBadge status="ACTIVE" /> : "—") },
           { key: "is_active", header: "Active", render: (r) => <StatusBadge status={r.is_active ? "ACTIVE" : "SUSPENDED"} /> },
           {
             key: "assign",
