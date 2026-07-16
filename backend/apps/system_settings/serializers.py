@@ -5,6 +5,7 @@ from apps.system_settings.models import (
     EmailSettings,
     SMSGatewaySettings,
     SystemSetting,
+    WeeklyReportSettings,
 )
 
 
@@ -32,6 +33,12 @@ class EmailSettingsSerializer(serializers.ModelSerializer):
         if not validated_data.get("smtp_password"):
             validated_data.pop("smtp_password", None)
         return super().update(instance, validated_data)
+
+
+class WeeklyReportSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WeeklyReportSettings
+        fields = "__all__"
 
 
 class SMSGatewaySettingsSerializer(serializers.ModelSerializer):

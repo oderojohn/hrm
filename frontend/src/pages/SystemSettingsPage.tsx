@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarPlus, CheckCircle2, KeyRound, Mail, Plus, Power, Send, Trash2 } from "lucide-react";
+import { CalendarClock, CalendarPlus, CheckCircle2, KeyRound, Mail, Plus, Power, Send, Trash2, X } from "lucide-react";
 import {
   syncAgentsApi,
   syncEventsApi,
@@ -11,7 +11,14 @@ import {
 } from "../api/sync";
 import { fetchAttendanceSettings, updateAttendanceSettings } from "../api/attendance";
 import { publicHolidaysApi, type PublicHoliday } from "../api/core";
-import { fetchEmailSettings, updateEmailSettings, sendTestEmail } from "../api/systemSettings";
+import {
+  fetchEmailSettings,
+  updateEmailSettings,
+  sendTestEmail,
+  fetchWeeklyReportSettings,
+  updateWeeklyReportSettings,
+  type WeeklyReportSettings,
+} from "../api/systemSettings";
 import { branchesApi } from "../api/organization";
 import { extractErrorMessage } from "../api/client";
 import { Tabs } from "../components/ui/Tabs";
@@ -42,6 +49,7 @@ export function SystemSettingsPage() {
           { key: "log", label: "Sync Activity Log", content: <SyncActivityLogTab /> },
           { key: "attendance", label: "Attendance Settings", content: <AttendanceSettingsTab /> },
           { key: "email", label: "Email Settings", content: <EmailSettingsTab /> },
+          { key: "reports-schedule", label: "Reports Schedule", content: <ReportsScheduleTab /> },
         ]}
       />
     </div>
@@ -590,6 +598,92 @@ function EmailSettingsTab() {
           {testResult && (
             <p className={testResult.ok ? "text-xs text-emerald-600" : "text-xs text-red-600"}>{testResult.message}</p>
           )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReportsScheduleTab() {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery({ queryKey: ["weekly-report-settings"], queryFn: fetchWeeklyReportSettings });
+  const [newRecipient, setNewRecipient] = useState("");
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: Partial<WeeklyReportSettings>) => updateWeeklyReportSettings(payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["weekly-report-settings"] }),
+  });
+
+  const toggleEnabled = () => {
+    if (!data) return;
+    updateMutation.mutate({ is_enabled: !data.is_enabled });
+  };
+
+  const addRecipient = () => {
+    if (!data || !newRecipient) return;
+    updateMutation.mutate({ extra_recipients: [...data.extra_recipients, newRecipient] });
+    setNewRecipient("");
+  };
+
+  const removeRecipient = (email: string) => {
+    if (!data) return;
+    updateMutation.mutate({ extra_recipients: data.extra_recipients.filter((e) => e !== email) });
+  };
+
+  if (isLoading || !data) return <FullPageSpinner />;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CalendarClock className="h-4 w-4 text-slate-400" /> Weekly Company Report
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 px-4 pb-4 pt-0">
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-600">
+          Runs automatically <span className="font-medium text-slate-800">every Monday at 8:00 AM (Nairobi time)</span>,
+          emailing the previous week's attendance/leave summary to every HR Manager and Super Admin, plus anyone
+          listed below. You can also send it on demand any time from the Reports page.
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={data.is_enabled}
+            onChange={toggleEnabled}
+            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+          />
+          Enabled
+        </label>
+
+        <div>
+          <Label>Additional Recipients</Label>
+          <div className="mb-2 flex flex-wrap gap-2">
+            {data.extra_recipients.length === 0 && <p className="text-xs text-slate-400">None added yet.</p>}
+            {data.extra_recipients.map((email) => (
+              <span
+                key={email}
+                className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700"
+              >
+                {email}
+                <button onClick={() => removeRecipient(email)} className="text-slate-400 hover:text-red-600">
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Input
+              type="email"
+              value={newRecipient}
+              onChange={(e) => setNewRecipient(e.target.value)}
+              placeholder="name@company.com"
+              className="flex-1"
+            />
+            <Button variant="outline" onClick={addRecipient} disabled={!newRecipient}>
+              <Plus className="h-3.5 w-3.5" /> Add
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

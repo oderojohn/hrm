@@ -12,12 +12,14 @@ from apps.system_settings.models import (
     EmailSettings,
     SMSGatewaySettings,
     SystemSetting,
+    WeeklyReportSettings,
 )
 from apps.system_settings.serializers import (
     BackupRecordSerializer,
     EmailSettingsSerializer,
     SMSGatewaySettingsSerializer,
     SystemSettingSerializer,
+    WeeklyReportSettingsSerializer,
 )
 
 
@@ -74,6 +76,24 @@ class EmailSettingsTestView(APIView):
         except Exception as exc:
             return Response({"detail": f"Failed to send: {exc}"}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"detail": f"Test email sent to {recipient}."})
+
+
+class WeeklyReportSettingsView(APIView):
+    """Singleton controls for the Monday-morning scheduled weekly report —
+    whether it's enabled, and extra recipients beyond HR/Super Admins."""
+
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        settings_obj = WeeklyReportSettings.get_solo()
+        return Response(WeeklyReportSettingsSerializer(settings_obj).data)
+
+    def patch(self, request):
+        settings_obj = WeeklyReportSettings.get_solo()
+        serializer = WeeklyReportSettingsSerializer(settings_obj, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class SMSGatewaySettingsView(APIView):

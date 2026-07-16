@@ -24,3 +24,19 @@ export async function sendTestEmail(to?: string) {
   const { data } = await apiClient.post<{ detail: string }>("/system-settings/email-settings/test/", { to });
   return data;
 }
+
+export interface WeeklyReportSettings {
+  id: number;
+  is_enabled: boolean;
+  extra_recipients: string[];
+}
+
+export async function fetchWeeklyReportSettings() {
+  const { data } = await apiClient.get<WeeklyReportSettings>("/system-settings/weekly-report-settings/");
+  return data;
+}
+
+export async function updateWeeklyReportSettings(payload: Partial<WeeklyReportSettings>) {
+  const { data } = await apiClient.patch<WeeklyReportSettings>("/system-settings/weekly-report-settings/", payload);
+  return data;
+}

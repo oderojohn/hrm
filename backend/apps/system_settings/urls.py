@@ -7,6 +7,7 @@ from apps.system_settings.views import (
     EmailSettingsView,
     SMSGatewaySettingsView,
     SystemSettingViewSet,
+    WeeklyReportSettingsView,
 )
 
 router = DefaultRouter()
@@ -16,5 +17,6 @@ router.register("backups", BackupRecordViewSet, basename="backup-record")
 urlpatterns = [
     path("email-settings/", EmailSettingsView.as_view(), name="email-settings"),
     path("email-settings/test/", EmailSettingsTestView.as_view(), name="email-settings-test"),
+    path("weekly-report-settings/", WeeklyReportSettingsView.as_view(), name="weekly-report-settings"),
     path("sms-settings/", SMSGatewaySettingsView.as_view(), name="sms-settings"),
 ] + router.urls

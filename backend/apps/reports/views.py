@@ -980,19 +980,26 @@ class WeeklySummaryCronView(APIView):
             return Response({"detail": "Unauthorized."}, status=401)
 
         from apps.accounts.models import User
+        from apps.system_settings.models import WeeklyReportSettings
+
+        report_settings = WeeklyReportSettings.get_solo()
+        if not report_settings.is_enabled:
+            return Response({"detail": "Weekly report is disabled in Settings -> Reports Schedule."})
 
         today = timezone.now().date()
         start = today - timedelta(days=today.weekday() + 7)
         end = start + timedelta(days=6)
         summary = build_weekly_summary(start, end)
 
-        recipients = list(
+        recipients = set(
             User.objects.filter(role__in=[User.Role.HR_MANAGER, User.Role.SUPER_ADMIN], is_active=True)
             .exclude(email="")
             .values_list("email", flat=True)
         )
+        recipients.update(e for e in report_settings.extra_recipients if e)
+        recipients = sorted(recipients)
         if not recipients:
-            return Response({"detail": "No HR/Admin recipients with an email address."})
+            return Response({"detail": "No recipients configured."})
 
         try:
             sent = send_weekly_report_email(recipients, start, end, summary)

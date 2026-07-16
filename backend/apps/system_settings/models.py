@@ -46,6 +46,34 @@ class EmailSettings(BaseModel):
         return obj
 
 
+class WeeklyReportSettings(BaseModel):
+    """Effectively a singleton — controls the Monday-morning scheduled
+    weekly report email (apps.reports.views.WeeklySummaryCronView). The
+    schedule itself (every Monday 08:00 EAT) is fixed in backend/vercel.json
+    since Vercel Cron requires a redeploy to change it; this only controls
+    whether it fires and who beyond HR Managers/Super Admins gets it.
+    """
+
+    is_enabled = models.BooleanField(default=True)
+    extra_recipients = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Additional email addresses to include, beyond every active HR Manager/Super Admin.",
+    )
+
+    class Meta:
+        verbose_name = "Weekly Report Settings"
+        verbose_name_plural = "Weekly Report Settings"
+
+    def __str__(self):
+        return "Weekly Report Settings"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1, defaults={"is_enabled": True, "extra_recipients": []})
+        return obj
+
+
 class SMSGatewaySettings(BaseModel):
     """Effectively a singleton — documents the SMS gateway config for review in the admin UI.
 
