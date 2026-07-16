@@ -114,3 +114,39 @@ export async function fetchAttendanceGridReport(params?: AttendanceGridReportPar
 export function attendanceGridReportExportUrl(format: "csv" | "xlsx" | "pdf", params?: AttendanceGridReportParams) {
   return reportUrl("/reports/attendance-grid/", format, params);
 }
+
+export interface WeeklySummary {
+  start: string;
+  end: string;
+  total_employees: number;
+  present_days: number;
+  absent_days: number;
+  on_leave_days: number;
+  late_arrivals: number;
+  early_departures: number;
+  leave_requests_submitted: number;
+  leave_requests_approved: number;
+  leave_requests_rejected: number;
+  leave_requests_pending: number;
+}
+
+export interface WeeklySummaryParams {
+  start?: string;
+}
+
+export async function fetchWeeklySummary(params?: WeeklySummaryParams) {
+  const { data } = await apiClient.get<WeeklySummary>("/reports/weekly-summary/", { params });
+  return data;
+}
+
+export function weeklySummaryExportUrl(format: "csv" | "xlsx" | "pdf", params?: WeeklySummaryParams) {
+  return reportUrl("/reports/weekly-summary/", format, params);
+}
+
+export async function sendWeeklySummaryEmail(email: string, params?: WeeklySummaryParams) {
+  const { data } = await apiClient.post<{ detail: string }>("/reports/weekly-summary/send/", {
+    email,
+    ...params,
+  });
+  return data;
+}

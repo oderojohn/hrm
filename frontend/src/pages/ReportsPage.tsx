@@ -1,25 +1,47 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { AlarmClockCheck, BarChart3, CalendarDays, CheckSquare, History, UserX } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { AlarmClockCheck, BarChart3, CalendarDays, CheckSquare, History, Mail, UserX } from "lucide-react";
 import {
   fetchAttendanceReport,
   fetchLateArrivalsReport,
   fetchAbsenteeismReport,
   fetchAttendanceGridReport,
+  fetchWeeklySummary,
   attendanceReportExportUrl,
   lateArrivalsReportExportUrl,
   absenteeismReportExportUrl,
   attendanceGridReportExportUrl,
+  weeklySummaryExportUrl,
+  sendWeeklySummaryEmail,
 } from "../api/reports";
 import { downloadExport } from "../api/resource";
+import { extractErrorMessage } from "../api/client";
 import { fetchAllEmployeesForSelect } from "../api/employees";
 import { branchesApi, departmentsApi } from "../api/organization";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Select } from "../components/ui/Select";
+import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
+import { StatCard } from "../components/StatCard";
 import { ExportButtonGroup } from "../components/ExportButtonGroup";
 import { DateRangeFilter, toAnalyticsParams, useDateRangeFilter } from "../components/DateRangeFilter";
+import { formatDate } from "../lib/utils";
+
+function mondayOf(d: Date) {
+  const day = d.getDay();
+  const diff = (day + 6) % 7; // days since Monday
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - diff);
+  return monday.toISOString().slice(0, 10);
+}
+
+function lastCompletedWeekStart() {
+  const today = new Date();
+  const thisMonday = new Date(mondayOf(today));
+  thisMonday.setDate(thisMonday.getDate() - 7);
+  return thisMonday.toISOString().slice(0, 10);
+}
 
 function monthRange() {
   const now = new Date();
@@ -35,6 +57,7 @@ function todayRange() {
 
 export function ReportsPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { data: employees } = useQuery({ queryKey: ["employees-all"], queryFn: fetchAllEmployeesForSelect });
   const [historyEmployeeId, setHistoryEmployeeId] = useState("");
 
@@ -47,6 +70,8 @@ export function ReportsPage() {
           <p className="text-sm text-slate-600">Generate and export attendance reports for any period.</p>
         </div>
       </div>
+
+      <WeeklyReportCard initialWeek={searchParams.get("week")} />
 
       <AttendanceRegisterCard />
 
@@ -91,6 +116,103 @@ export function ReportsPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+function WeeklyReportCard({ initialWeek }: { initialWeek: string | null }) {
+  const [weekStart, setWeekStart] = useState(initialWeek || lastCompletedWeekStart());
+  const [email, setEmail] = useState("");
+  const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const params = { start: weekStart };
+  const { data, isLoading } = useQuery({
+    queryKey: ["report-weekly-summary", weekStart],
+    queryFn: () => fetchWeeklySummary(params),
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: () => sendWeeklySummaryEmail(email, params),
+    onSuccess: (result) => setSendResult({ ok: true, message: result.detail }),
+    onError: (err) => setSendResult({ ok: false, message: extractErrorMessage(err) }),
+  });
+
+  const shiftWeek = (deltaDays: number) => {
+    const next = new Date(weekStart);
+    next.setDate(next.getDate() + deltaDays);
+    setWeekStart(next.toISOString().slice(0, 10));
+    setSendResult(null);
+  };
+
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CalendarDays className="h-4 w-4 text-slate-400" /> Weekly Company Report
+        </CardTitle>
+        <ExportButtonGroup
+          onExport={(format) => downloadExport(weeklySummaryExportUrl(format, params), `weekly-report-${weekStart}.${format}`)}
+        />
+      </CardHeader>
+      <CardContent className="space-y-4 px-4 pb-4 pt-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => shiftWeek(-7)}>
+            ← Prev Week
+          </Button>
+          <span className="text-sm font-medium text-slate-700">
+            {formatDate(weekStart)} – {formatDate(weekEnd.toISOString().slice(0, 10))}
+          </span>
+          <Button size="sm" variant="outline" onClick={() => shiftWeek(7)}>
+            Next Week →
+          </Button>
+        </div>
+
+        {isLoading || !data ? (
+          <p className="text-sm text-slate-400">Loading…</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <StatCard label="Total Employees" value={data.total_employees} tone="slate" />
+            <StatCard label="Present (emp-days)" value={data.present_days} tone="green" />
+            <StatCard label="Absent (emp-days)" value={data.absent_days} tone="red" />
+            <StatCard label="On Leave (emp-days)" value={data.on_leave_days} tone="blue" />
+            <StatCard label="Late Arrivals" value={data.late_arrivals} tone="amber" />
+            <StatCard label="Early Departures" value={data.early_departures} tone="amber" />
+            <StatCard label="Leave Submitted" value={data.leave_requests_submitted} tone="slate" />
+            <StatCard label="Leave Approved" value={data.leave_requests_approved} tone="green" />
+            <StatCard label="Leave Rejected" value={data.leave_requests_rejected} tone="red" />
+            <StatCard label="Leave Pending" value={data.leave_requests_pending} tone="amber" />
+          </div>
+        )}
+
+        <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+            <Mail className="h-3.5 w-3.5" /> Email this week's report to an address:
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@company.com"
+              className="flex-1"
+            />
+            <Button variant="outline" disabled={!email} onClick={() => sendMutation.mutate()} loading={sendMutation.isPending}>
+              Send
+            </Button>
+          </div>
+          {sendResult && (
+            <p className={sendResult.ok ? "text-xs text-emerald-600" : "text-xs text-red-600"}>{sendResult.message}</p>
+          )}
+        </div>
+
+        <p className="text-xs text-slate-400">
+          A summary like this is also emailed automatically every Monday to all HR Managers/Super Admins, with a
+          link back to this page.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 

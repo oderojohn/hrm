@@ -5,8 +5,10 @@ from datetime import date, timedelta
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+import os
+
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -14,7 +16,7 @@ from apps.assets.models import Asset
 from apps.attendance.models import AttendanceRecord, PunchLog
 from apps.attendance.utils import count_expected_working_days, is_expected_working_day
 from apps.communication.models import Announcement
-from apps.core.exports import export_attendance_grid_xlsx, export_csv, export_pdf, export_queryset
+from apps.core.exports import export_attendance_grid_xlsx, export_csv, export_pdf, export_queryset, export_xlsx
 from apps.core.models import PublicHoliday
 from apps.core.permissions import IsHRManagerOrAbove
 from apps.disciplinary.models import DisciplinaryCase
@@ -24,6 +26,8 @@ from apps.leave.models import LeaveRequest
 from apps.organization.models import Branch, Department
 from apps.performance.models import PerformanceReview
 from apps.recruitment.models import Application, JobVacancy
+from apps.reports.emails import send_weekly_report_email
+from apps.reports.services import SUMMARY_LABELS, build_weekly_summary, resolve_week
 from apps.reports.utils import resolve_period
 from apps.training.models import TrainingAttendance
 
@@ -908,3 +912,90 @@ class TurnoverReportView(BaseReportView):
         left = queryset.count()
         rate = round((left / total) * 100, 1) if total else 0
         return {"total_employees": total, "employees_who_left": left, "turnover_rate_percent": rate}
+
+
+class WeeklySummaryReportView(APIView):
+    """Company-wide weekly digest — JSON preview, or CSV/XLSX/PDF export via
+    ?format=. Same build_weekly_summary() the scheduled/on-demand email uses,
+    so the numbers you see match what gets sent.
+    """
+
+    permission_classes = [IsHRManagerOrAbove]
+
+    def get(self, request):
+        start, end = resolve_week(request)
+        summary = build_weekly_summary(start, end)
+        rows = [[SUMMARY_LABELS[key], value] for key, value in summary.items() if key in SUMMARY_LABELS]
+        headers = ["Metric", "Value"]
+        base_filename = f"weekly_report_{start.isoformat()}"
+
+        fmt = request.query_params.get("format", "").lower()
+        if fmt == "csv":
+            return export_csv(rows, headers, f"{base_filename}.csv")
+        if fmt == "xlsx":
+            return export_xlsx(rows, headers, f"{base_filename}.xlsx")
+        if fmt == "pdf":
+            return export_pdf(rows, headers, f"{base_filename}.pdf")
+
+        return Response({"start": start.isoformat(), "end": end.isoformat(), **summary})
+
+
+class WeeklySummarySendView(APIView):
+    """On-demand "send this week's report to an email address" button."""
+
+    permission_classes = [IsHRManagerOrAbove]
+
+    def post(self, request):
+        recipient = request.data.get("email")
+        if not recipient:
+            return Response({"detail": "An email address is required."}, status=400)
+
+        start, end = resolve_week(request)
+        summary = build_weekly_summary(start, end)
+        try:
+            sent = send_weekly_report_email([recipient], start, end, summary)
+        except Exception as exc:
+            return Response({"detail": f"Failed to send: {exc}"}, status=400)
+        if not sent:
+            return Response(
+                {"detail": "Email isn't configured yet — set it up under Settings -> Email Settings first."},
+                status=400,
+            )
+        return Response({"detail": f"Weekly report sent to {recipient}."})
+
+
+class WeeklySummaryCronView(APIView):
+    """Triggered by Vercel Cron (see vercel.json) every Monday morning —
+    emails the just-completed week's report to every HR Manager/Super Admin.
+    Vercel attaches `Authorization: Bearer $CRON_SECRET` automatically when
+    CRON_SECRET is set as a project env var; any other caller is rejected.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        secret = os.environ.get("CRON_SECRET")
+        if secret and request.headers.get("Authorization") != f"Bearer {secret}":
+            return Response({"detail": "Unauthorized."}, status=401)
+
+        from apps.accounts.models import User
+
+        today = timezone.now().date()
+        start = today - timedelta(days=today.weekday() + 7)
+        end = start + timedelta(days=6)
+        summary = build_weekly_summary(start, end)
+
+        recipients = list(
+            User.objects.filter(role__in=[User.Role.HR_MANAGER, User.Role.SUPER_ADMIN], is_active=True)
+            .exclude(email="")
+            .values_list("email", flat=True)
+        )
+        if not recipients:
+            return Response({"detail": "No HR/Admin recipients with an email address."})
+
+        try:
+            sent = send_weekly_report_email(recipients, start, end, summary)
+        except Exception as exc:
+            return Response({"detail": f"Failed to send: {exc}"}, status=500)
+        return Response({"detail": "sent" if sent else "email not configured", "recipients": recipients})

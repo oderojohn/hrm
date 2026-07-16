@@ -18,10 +18,16 @@ from apps.reports.views import (
     RecruitmentReportView,
     TrainingReportView,
     TurnoverReportView,
+    WeeklySummaryCronView,
+    WeeklySummaryReportView,
+    WeeklySummarySendView,
 )
 
 urlpatterns = [
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
+    path("weekly-summary/", WeeklySummaryReportView.as_view(), name="report-weekly-summary"),
+    path("weekly-summary/send/", WeeklySummarySendView.as_view(), name="report-weekly-summary-send"),
+    path("weekly-summary/cron/", WeeklySummaryCronView.as_view(), name="report-weekly-summary-cron"),
     path("employees/", EmployeeReportView.as_view(), name="report-employees"),
     path("attendance/", AttendanceReportView.as_view(), name="report-attendance"),
     path("attendance-analytics/", AttendanceAnalyticsView.as_view(), name="report-attendance-analytics"),
