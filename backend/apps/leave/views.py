@@ -1,3 +1,5 @@
+from datetime import date
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import viewsets
@@ -37,7 +39,7 @@ from apps.leave.serializers import (
     WorkflowStepSerializer,
     WorkflowTemplateSerializer,
 )
-from apps.leave.utils import calculate_working_days, has_overlapping_request, locking_queryset
+from apps.leave.utils import calculate_working_days, has_overlapping_request, locking_queryset, next_reporting_date
 from apps.leave.workflow import build_dynamic_approval_chain
 
 
@@ -128,6 +130,31 @@ class LeaveRequestViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
         if employee_input:
             return Employee.objects.filter(id=employee_input).first()
         return getattr(self.request.user, "employee", None)
+
+    @action(detail=False, methods=["get"])
+    def preview(self, request):
+        """Live preview for the Request Leave form — total working days and
+        the next-working-day 'reporting date', computed with the exact same
+        rules used at real submission time (perform_create below), so the
+        number shown before submitting always matches what gets saved.
+        """
+        employee = self._resolve_employee()
+        start_param = request.query_params.get("start_date")
+        end_param = request.query_params.get("end_date")
+        if not start_param or not end_param:
+            return Response({"detail": "start_date and end_date are required."}, status=400)
+
+        start_date = date.fromisoformat(start_param)
+        end_date = date.fromisoformat(end_param)
+        if end_date < start_date:
+            return Response({"detail": "End date cannot be before start date."}, status=400)
+        is_half_day = request.query_params.get("is_half_day") == "true"
+
+        branch = employee.branch if employee else None
+        total_days = calculate_working_days(start_date, end_date, branch=branch, is_half_day=is_half_day)
+        reporting_date = next_reporting_date(end_date, branch=branch)
+
+        return Response({"total_days": total_days, "reporting_date": reporting_date.isoformat()})
 
     def perform_create(self, serializer):
         employee = self._resolve_employee()

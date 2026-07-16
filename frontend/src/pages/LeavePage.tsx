@@ -13,6 +13,7 @@ import {
   reassignLeaveStep,
   returnForCorrection,
   resubmitLeaveRequest,
+  previewLeaveRequest,
   type LeaveRequest,
 } from "../api/leave";
 import { fetchAllEmployeesForSelect } from "../api/employees";
@@ -23,9 +24,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card"
 import { Button } from "../components/ui/Button";
 import { Dialog } from "../components/ui/Dialog";
 import { Select } from "../components/ui/Select";
+import { Input } from "../components/ui/Input";
+import { Label } from "../components/ui/Label";
 import { Textarea } from "../components/ui/Textarea";
-import { ResourceForm } from "../components/resource/ResourceForm";
-import type { FormField } from "../components/resource/types";
 import { DataTable } from "../components/resource/DataTable";
 import { StatusBadge } from "../components/ui/Badge";
 import { StatCard } from "../components/StatCard";
@@ -74,6 +75,20 @@ function MyRequestsTab() {
   const [formError, setFormError] = useState<string | null>(null);
   const [progressTarget, setProgressTarget] = useState<LeaveRequest | null>(null);
 
+  const [leaveTypeId, setLeaveTypeId] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [isHalfDay, setIsHalfDay] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const resetForm = () => {
+    setLeaveTypeId("");
+    setStartDate("");
+    setEndDate("");
+    setIsHalfDay(false);
+    setReason("");
+  };
+
   const { data: balances } = useQuery({
     queryKey: ["leave-balances", user?.employee_id],
     queryFn: () => fetchLeaveBalances(user?.employee_id ?? undefined),
@@ -88,13 +103,28 @@ function MyRequestsTab() {
     enabled: !!user?.employee_id,
   });
 
+  const previewEnabled = !!startDate && !!endDate && endDate >= startDate;
+  const { data: preview, isFetching: previewLoading } = useQuery({
+    queryKey: ["leave-preview", startDate, endDate, isHalfDay],
+    queryFn: () => previewLeaveRequest({ start_date: startDate, end_date: endDate, is_half_day: isHalfDay }),
+    enabled: previewEnabled,
+  });
+
   const createMutation = useMutation({
-    mutationFn: (values: Partial<LeaveRequest>) => leaveRequestsApi.create(values),
+    mutationFn: () =>
+      leaveRequestsApi.create({
+        leave_type: Number(leaveTypeId),
+        start_date: startDate,
+        end_date: endDate,
+        is_half_day: isHalfDay,
+        reason,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["leave-requests"] });
       queryClient.invalidateQueries({ queryKey: ["leave-balances"] });
       setDialogOpen(false);
       setFormError(null);
+      resetForm();
     },
     onError: (err) => setFormError(extractErrorMessage(err)),
   });
@@ -108,20 +138,6 @@ function MyRequestsTab() {
     mutationFn: (id: number) => resubmitLeaveRequest(id, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["leave-requests"] }),
   });
-
-  const formFields: FormField[] = [
-    {
-      name: "leave_type",
-      label: "Leave Type",
-      type: "select",
-      required: true,
-      options: leaveTypes?.results.map((lt) => ({ label: lt.name, value: lt.id })) ?? [],
-    },
-    { name: "start_date", label: "Start Date", type: "date", required: true },
-    { name: "end_date", label: "End Date", type: "date", required: true },
-    { name: "is_half_day", label: "Half Day", type: "checkbox" },
-    { name: "reason", label: "Reason", type: "textarea" },
-  ];
 
   return (
     <div className="space-y-4">
@@ -180,13 +196,79 @@ function MyRequestsTab() {
         }}
         title="Request Leave"
       >
-        <ResourceForm
-          fields={formFields}
-          submitting={createMutation.isPending}
-          errorMessage={formError}
-          onCancel={() => setDialogOpen(false)}
-          onSubmit={(values) => createMutation.mutate(values as Partial<LeaveRequest>)}
-        />
+        <div className="space-y-4">
+          {formError && <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div>}
+
+          <div>
+            <Label>Leave Type</Label>
+            <Select value={leaveTypeId} onChange={(e) => setLeaveTypeId(e.target.value)}>
+              <option value="">Select...</option>
+              {leaveTypes?.results.map((lt) => (
+                <option key={lt.id} value={lt.id}>
+                  {lt.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Start Date</Label>
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </div>
+            <div>
+              <Label>End Date</Label>
+              <Input type="date" value={endDate} min={startDate || undefined} onChange={(e) => setEndDate(e.target.value)} />
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={isHalfDay}
+              onChange={(e) => setIsHalfDay(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+            />
+            Half Day
+          </label>
+
+          {previewEnabled && (
+            <div className="rounded-md border border-brand-100 bg-brand-50/60 px-3 py-2.5 text-sm">
+              {previewLoading ? (
+                <span className="text-slate-500">Calculating…</span>
+              ) : preview ? (
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+                  <span>
+                    <span className="font-semibold text-slate-800">{preview.total_days}</span>{" "}
+                    <span className="text-slate-600">day(s)</span>
+                  </span>
+                  <span className="text-slate-600">
+                    Reporting back:{" "}
+                    <span className="font-semibold text-slate-800">{formatDate(preview.reporting_date)}</span>
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <div>
+            <Label>Reason</Label>
+            <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} />
+          </div>
+
+          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              loading={createMutation.isPending}
+              disabled={!leaveTypeId || !startDate || !endDate}
+              onClick={() => createMutation.mutate()}
+            >
+              Submit
+            </Button>
+          </div>
+        </div>
       </Dialog>
 
       <Dialog open={!!progressTarget} onClose={() => setProgressTarget(null)} title="Approval Progress">

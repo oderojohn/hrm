@@ -177,3 +177,13 @@ export async function fetchLeaveCalendar(scope: "personal" | "team") {
   const { data } = await apiClient.get<LeaveRequest[]>("/leave/requests/calendar/", { params: { scope } });
   return data;
 }
+
+export interface LeaveRequestPreview {
+  total_days: number;
+  reporting_date: string;
+}
+
+export async function previewLeaveRequest(params: { start_date: string; end_date: string; is_half_day?: boolean }) {
+  const { data } = await apiClient.get<LeaveRequestPreview>("/leave/requests/preview/", { params });
+  return data;
+}

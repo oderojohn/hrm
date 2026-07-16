@@ -39,6 +39,21 @@ def calculate_working_days(start_date, end_date, branch=None, is_half_day=False)
     return total
 
 
+def next_reporting_date(end_date, branch=None):
+    """The next working day after end_date — when the employee is expected
+    back at work. Mirrors calculate_working_days' own weekday/holiday rules
+    so the two always agree."""
+    holiday_dates = set(
+        PublicHoliday.objects.filter(date__gt=end_date, date__lte=end_date + timedelta(days=14))
+        .filter(Q(branch=branch) | Q(branch__isnull=True))
+        .values_list("date", flat=True)
+    )
+    cursor = end_date + timedelta(days=1)
+    while cursor.weekday() >= 5 or cursor in holiday_dates:
+        cursor += timedelta(days=1)
+    return cursor
+
+
 def has_overlapping_request(employee, start_date, end_date, exclude_id=None):
     """True if the employee already has a PENDING/APPROVED request overlapping this range."""
     from apps.leave.models import LeaveRequest
