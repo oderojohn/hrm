@@ -71,6 +71,7 @@ class Device(BaseModel):
 
     class DeviceType(models.TextChoices):
         ZKTECO = "ZKTECO", "ZKTeco Biometric"
+        HIKVISION = "HIKVISION", "Hikvision Access Control"
 
     name = models.CharField(max_length=100)
     device_type = models.CharField(max_length=20, choices=DeviceType.choices, default=DeviceType.ZKTECO)

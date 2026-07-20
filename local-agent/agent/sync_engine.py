@@ -8,6 +8,7 @@ import urllib.request
 from datetime import datetime
 
 from agent import db
+from agent.hikvision_client import HikvisionClient
 from agent.zk_client import ZKClient
 
 
@@ -16,11 +17,32 @@ def _log(callback, level, message):
         callback(datetime.now(), level, message)
 
 
-def push_batch(cloud_url, api_key, device_name, device_ip, users, punches):
+def _build_client(device_cfg):
+    """Dispatches to the right device client based on device_cfg["type"] —
+    defaults to "zkteco" so existing configs saved before Hikvision support
+    was added keep working unchanged."""
+    device_type = device_cfg.get("type", "zkteco")
+    if device_type == "hikvision":
+        return HikvisionClient(
+            device_cfg["ip"],
+            port=device_cfg.get("port", 80),
+            username=device_cfg.get("username", "admin"),
+            password=device_cfg.get("password", ""),
+        )
+    return ZKClient(device_cfg["ip"], device_cfg.get("port", 4370))
+
+
+def push_batch(cloud_url, api_key, device_name, device_ip, users, punches, device_type="zkteco"):
     """POSTs one batch to the cloud's sync push endpoint. Returns (ok, result)
     where result is the parsed JSON response on success, or an error string.
     """
-    payload = {"device_name": device_name, "device_ip": device_ip, "users": users, "punches": punches}
+    payload = {
+        "device_name": device_name,
+        "device_ip": device_ip,
+        "device_type": device_type,
+        "users": users,
+        "punches": punches,
+    }
     req = urllib.request.Request(
         cloud_url.rstrip("/") + "/api/attendance/sync/push/",
         data=json.dumps(payload).encode("utf-8"),
@@ -45,11 +67,12 @@ def sync_device(device_cfg, cloud_url, api_key, log_callback=None):
     Never raises — all errors are caught and logged so one bad device
     doesn't stop the others (sync_all loops over devices).
     """
-    name, ip, port = device_cfg["name"], device_cfg["ip"], device_cfg.get("port", 4370)
+    name, ip = device_cfg["name"], device_cfg["ip"]
+    port = device_cfg.get("port", 4370 if device_cfg.get("type", "zkteco") == "zkteco" else 80)
     _log(log_callback, "info", f"[{name}] Connecting to {ip}:{port}...")
 
     try:
-        client = ZKClient(ip, port)
+        client = _build_client(device_cfg)
         users = client.fetch_users()
         logs = client.fetch_attendance_logs()
     except Exception as exc:
@@ -86,7 +109,9 @@ def sync_device(device_cfg, cloud_url, api_key, log_callback=None):
         {"user_id": p["device_user_id"], "timestamp": p["timestamp"], "raw_status": p["raw_status"]}
         for p in unpushed
     ]
-    ok, result = push_batch(cloud_url, api_key, name, ip, users_payload, punches_payload)
+    ok, result = push_batch(
+        cloud_url, api_key, name, ip, users_payload, punches_payload, device_cfg.get("type", "zkteco")
+    )
 
     if ok:
         db.mark_pushed([p["id"] for p in unpushed])

@@ -94,10 +94,13 @@ def split_device_name(raw_name):
     return first_name, middle_name, last_name or "Unknown"
 
 
-def sync_employees_from_list(users):
+def sync_employees_from_list(users, branch=None):
     """Creates/updates Employee rows from an iterable of objects exposing
     `.user_id`/`.name` (pyzk's own User objects satisfy this, and so does a
     plain list of SimpleNamespace built from an agent's HTTP push payload).
+
+    `branch` is applied only to newly-created employees, so a Bahati-scoped
+    device/agent doesn't silently move an existing employee to another branch.
     """
     users = list(users)
     created, updated, skipped = 0, 0, 0
@@ -114,6 +117,7 @@ def sync_employees_from_list(users):
                 first_name=first_name,
                 middle_name=middle_name,
                 last_name=last_name,
+                branch=branch,
                 employment_date=timezone.now().date(),
                 employment_type=Employee.EmploymentType.FULL_TIME,
             ),
@@ -135,10 +139,10 @@ def sync_employees_from_list(users):
     return {"created": created, "updated": updated, "skipped": skipped, "total_on_device": len(users)}
 
 
-def sync_employees_from_device(client=None):
+def sync_employees_from_device(client=None, branch=None):
     """Pulls the device's enrolled users and creates/updates matching Employee rows."""
     client = client or ZKTecoClient()
-    return sync_employees_from_list(client.fetch_users())
+    return sync_employees_from_list(client.fetch_users(), branch=branch)
 
 
 def _find_open_session(employee, before_timestamp):
@@ -304,7 +308,7 @@ def sync_all_devices():
     for device in Device.objects.filter(is_active=True):
         client = ZKTecoClient(ip=device.ip_address, port=device.port)
         try:
-            employee_summary = sync_employees_from_device(client)
+            employee_summary = sync_employees_from_device(client, branch=device.branch)
             attendance_summary = sync_attendance_from_device(client, device=device)
             device.last_synced_at = timezone.now()
             device.save(update_fields=["last_synced_at"])

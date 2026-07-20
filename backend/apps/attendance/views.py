@@ -355,6 +355,11 @@ class SyncPushView(APIView):
         agent = request.auth
         device_name = request.data.get("device_name") or "Unnamed Device"
         device_ip = request.data.get("device_ip")
+        device_type = (
+            Device.DeviceType.HIKVISION
+            if request.data.get("device_type") == "hikvision"
+            else Device.DeviceType.ZKTECO
+        )
         users_payload = request.data.get("users", [])
         punches_payload = request.data.get("punches", [])
 
@@ -364,15 +369,17 @@ class SyncPushView(APIView):
                 defaults={
                     "ip_address": device_ip,
                     "branch": agent.branch,
-                    "device_type": Device.DeviceType.ZKTECO,
+                    "device_type": device_type,
                 },
             )
             device.ip_address = device_ip or device.ip_address
+            device.device_type = device_type
             device.last_synced_at = timezone.now()
-            device.save(update_fields=["ip_address", "last_synced_at"])
+            device.save(update_fields=["ip_address", "device_type", "last_synced_at"])
 
             employee_summary = sync_employees_from_list(
-                SimpleNamespace(user_id=u.get("user_id"), name=u.get("name", "")) for u in users_payload
+                (SimpleNamespace(user_id=u.get("user_id"), name=u.get("name", "")) for u in users_payload),
+                branch=agent.branch,
             )
 
             device_id_to_employee = {

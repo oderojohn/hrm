@@ -185,7 +185,7 @@ class SettingsWindow(tk.Toplevel):
         )
 
         ttk.Separator(self).grid(row=5, column=0, columnspan=3, sticky="ew", pady=8)
-        ttk.Label(self, text="ZK Devices", font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w", **pad)
+        ttk.Label(self, text="Devices", font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w", **pad)
 
         self.device_list = tk.Listbox(self, height=7, width=58)
         self.device_list.grid(row=7, column=0, columnspan=3, padx=12)
@@ -207,7 +207,9 @@ class SettingsWindow(tk.Toplevel):
     def _refresh_device_list(self):
         self.device_list.delete(0, "end")
         for d in self.devices:
-            self.device_list.insert("end", f"{d['name']}  —  {d['ip']}:{d.get('port', 4370)}")
+            type_label = "Hikvision" if d.get("type", "zkteco") == "hikvision" else "ZKTeco"
+            default_port = 80 if type_label == "Hikvision" else 4370
+            self.device_list.insert("end", f"{d['name']}  —  {type_label}  —  {d['ip']}:{d.get('port', default_port)}")
 
     def _add_device(self):
         DeviceDialog(self, on_add=self._on_device_added)
@@ -251,7 +253,7 @@ class DeviceDialog(tk.Toplevel):
     def __init__(self, parent, on_add):
         super().__init__(parent)
         self.title("Add Device")
-        self.geometry("320x220")
+        self.geometry("320x340")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -262,18 +264,49 @@ class DeviceDialog(tk.Toplevel):
         self.name_var = tk.StringVar()
         ttk.Entry(self, textvariable=self.name_var).grid(row=0, column=1, **pad)
 
-        ttk.Label(self, text="IP Address").grid(row=1, column=0, sticky="w", **pad)
-        self.ip_var = tk.StringVar()
-        ttk.Entry(self, textvariable=self.ip_var).grid(row=1, column=1, **pad)
+        ttk.Label(self, text="Type").grid(row=1, column=0, sticky="w", **pad)
+        self.type_var = tk.StringVar(value="ZKTeco")
+        type_combo = ttk.Combobox(
+            self, textvariable=self.type_var, values=["ZKTeco", "Hikvision"], state="readonly", width=17
+        )
+        type_combo.grid(row=1, column=1, **pad)
+        type_combo.bind("<<ComboboxSelected>>", self._on_type_changed)
 
-        ttk.Label(self, text="Port").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Label(self, text="IP Address").grid(row=2, column=0, sticky="w", **pad)
+        self.ip_var = tk.StringVar()
+        ttk.Entry(self, textvariable=self.ip_var).grid(row=2, column=1, **pad)
+
+        ttk.Label(self, text="Port").grid(row=3, column=0, sticky="w", **pad)
         self.port_var = tk.StringVar(value="4370")
-        ttk.Entry(self, textvariable=self.port_var).grid(row=2, column=1, **pad)
+        ttk.Entry(self, textvariable=self.port_var).grid(row=3, column=1, **pad)
+
+        self.username_label = ttk.Label(self, text="Username")
+        self.username_var = tk.StringVar(value="admin")
+        self.username_entry = ttk.Entry(self, textvariable=self.username_var)
+
+        self.password_label = ttk.Label(self, text="Password")
+        self.password_var = tk.StringVar()
+        self.password_entry = ttk.Entry(self, textvariable=self.password_var, show="•")
 
         footer = ttk.Frame(self)
-        footer.grid(row=3, column=0, columnspan=2, pady=16)
+        footer.grid(row=6, column=0, columnspan=2, pady=16)
         ttk.Button(footer, text="Cancel", command=self.destroy).pack(side="left", padx=6)
         ttk.Button(footer, text="Add", command=self._add).pack(side="left", padx=6)
+
+    def _on_type_changed(self, _event=None):
+        pad = {"padx": 12, "pady": 6}
+        if self.type_var.get() == "Hikvision":
+            self.port_var.set("80")
+            self.username_label.grid(row=4, column=0, sticky="w", **pad)
+            self.username_entry.grid(row=4, column=1, **pad)
+            self.password_label.grid(row=5, column=0, sticky="w", **pad)
+            self.password_entry.grid(row=5, column=1, **pad)
+        else:
+            self.port_var.set("4370")
+            self.username_label.grid_remove()
+            self.username_entry.grid_remove()
+            self.password_label.grid_remove()
+            self.password_entry.grid_remove()
 
     def _add(self):
         name = self.name_var.get().strip()
@@ -281,9 +314,14 @@ class DeviceDialog(tk.Toplevel):
         if not name or not ip:
             messagebox.showerror("Missing fields", "Name and IP address are required.")
             return
+        is_hikvision = self.type_var.get() == "Hikvision"
         try:
             port = int(self.port_var.get())
         except ValueError:
-            port = 4370
-        self.on_add({"name": name, "ip": ip, "port": port})
+            port = 80 if is_hikvision else 4370
+        device = {"name": name, "type": "hikvision" if is_hikvision else "zkteco", "ip": ip, "port": port}
+        if is_hikvision:
+            device["username"] = self.username_var.get().strip() or "admin"
+            device["password"] = self.password_var.get()
+        self.on_add(device)
         self.destroy()

@@ -1,7 +1,8 @@
 # Emboita Sync Agent
 
-A standalone desktop app that runs on a PC next to a ZKTeco biometric device.
-It polls the device on an interval, stores every punch in a local SQLite
+A standalone desktop app that runs on a PC next to one or more attendance
+devices (ZKTeco biometric units or Hikvision access-control terminals). It
+polls each device on an interval, stores every punch in a local SQLite
 database, and pushes only the punches it hasn't pushed yet to the Emboita
 Hotel HRM cloud — so the cloud stays up to date even when the device itself
 has no direct route to the internet.
@@ -29,8 +30,15 @@ On first launch the app has no configuration. Open **Settings**, fill in:
 - **API Key** — the key copied from the cloud's Sync Agents page.
 - **Sync Interval** — how often (in minutes) to check the device for new
   punches.
-- **ZK Devices** — add one row per physical device this installation should
-  poll (name, IP address, port — default port is 4370).
+- **Devices** — add one row per physical device this installation should
+  poll:
+  - **ZKTeco** — name, IP address, port (default `4370`).
+  - **Hikvision** — name, IP address, port (default `80`), plus the admin
+    **Username**/**Password** set on the device during its first-time
+    activation (Hikvision's ISAPI web interface uses HTTP Digest auth, not
+    the ZKTeco binary protocol, so these devices need their own login).
+    The device must already be activated (has an admin password set) —
+    an unactivated Hikvision unit will reject every request.
 
 Click **Test Connection** to confirm the API key is valid before saving.
 Once saved, the agent starts polling automatically in the background; use
