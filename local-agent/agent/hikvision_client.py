@@ -6,6 +6,7 @@ sync_engine.py can poll either device brand through the same pipeline.
 Verified directly against a real DS-K1A8503MF-B unit: JSON responses via
 ?format=json, HTTP Digest auth, paginated search endpoints.
 """
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -13,6 +14,13 @@ import requests
 from requests.auth import HTTPDigestAuth
 
 PAGE_SIZE = 30
+
+# Hikvision's own anti-brute-force "Illegal Login Lock" counts rapid digest
+# auth handshakes as suspicious regardless of whether they succeed — a burst
+# of back-to-back paginated requests can trip it (confirmed against a real
+# DS-K1A8503MF-B: it locked out after ~18 unpaced requests). A small gap
+# between pages keeps routine syncing well clear of that threshold.
+PAGE_DELAY_SECONDS = 1.5
 
 # Hikvision's own attendanceStatus classification, when the device has T&A
 # schedule/reader-mode rules configured — mapped onto the exact same
@@ -70,6 +78,7 @@ class HikvisionClient:
             position += PAGE_SIZE
             if not entries or position >= search.get("totalMatches", 0):
                 break
+            time.sleep(PAGE_DELAY_SECONDS)
         return users
 
     def fetch_attendance_logs(self):
@@ -107,6 +116,7 @@ class HikvisionClient:
             position += PAGE_SIZE
             if not entries or position >= search.get("totalMatches", 0):
                 break
+            time.sleep(PAGE_DELAY_SECONDS)
         return logs
 
     def device_info(self):
