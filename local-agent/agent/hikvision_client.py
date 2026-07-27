@@ -22,6 +22,14 @@ PAGE_SIZE = 30
 # between pages keeps routine syncing well clear of that threshold.
 PAGE_DELAY_SECONDS = 1.5
 
+# Separately from the lockout above, this device's embedded auth service has
+# also been observed returning a spurious, transient 401 on an otherwise-valid
+# request — confirmed by a follow-up request seconds later succeeding with the
+# exact same credentials. A short retry absorbs that flakiness instead of
+# failing the whole sync cycle over what turned out to be a one-off blip.
+UNAUTHORIZED_RETRY_ATTEMPTS = 2
+UNAUTHORIZED_RETRY_DELAY_SECONDS = 4
+
 # Hikvision's own attendanceStatus classification, when the device has T&A
 # schedule/reader-mode rules configured — mapped onto the exact same
 # raw_status convention the cloud already understands for ZKTeco devices
@@ -46,15 +54,18 @@ class HikvisionClient:
         self.auth = HTTPDigestAuth(username, password)
         self.timeout = timeout
 
+    def _request(self, method, path, json_body=None):
+        url = f"{self.base_url}{path}?format=json"
+        attempts = UNAUTHORIZED_RETRY_ATTEMPTS + 1
+        for attempt in range(attempts):
+            resp = requests.request(method, url, json=json_body, auth=self.auth, timeout=self.timeout)
+            if resp.status_code != 401 or attempt == attempts - 1:
+                resp.raise_for_status()
+                return resp
+            time.sleep(UNAUTHORIZED_RETRY_DELAY_SECONDS)
+
     def _post(self, path, body):
-        resp = requests.post(
-            f"{self.base_url}{path}?format=json",
-            json=body,
-            auth=self.auth,
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", path, body).json()
 
     def fetch_users(self):
         """Returns [SimpleNamespace(user_id=str, name=str), ...]."""
@@ -120,8 +131,4 @@ class HikvisionClient:
         return logs
 
     def device_info(self):
-        resp = requests.get(
-            f"{self.base_url}/ISAPI/System/deviceInfo?format=json", auth=self.auth, timeout=self.timeout
-        )
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", "/ISAPI/System/deviceInfo").json()
