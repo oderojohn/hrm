@@ -64,6 +64,15 @@ class EmployeeViewSet(AuditLogMixin, ExportMixin, viewsets.ModelViewSet):
         position_title = obj.position.title if obj.position else ""
         return [obj.employee_number, obj.full_name, department_name, position_title, obj.employment_status]
 
+    def perform_destroy(self, instance):
+        """Soft-delete, not a hard delete — Employee FKs from attendance, leave,
+        performance, training, assets, disciplinary, and documents all CASCADE,
+        so a real .delete() here would silently wipe that employee's entire
+        history. soft_delete() just flips is_deleted, which ActiveManager
+        already excludes from every normal query."""
+        self._log(AuditLog.Action.DELETE, instance)
+        instance.soft_delete()
+
     def _push_to_device_best_effort(self, employee):
         """Provisioning a live biometric device is best-effort — a device outage
         must never block saving an employee record in the database."""

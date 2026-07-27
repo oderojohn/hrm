@@ -26,7 +26,7 @@ import { Button } from "../components/ui/Button";
 import { StatCard } from "../components/StatCard";
 import { ExportButtonGroup } from "../components/ExportButtonGroup";
 import { DateRangeFilter, toAnalyticsParams, useDateRangeFilter } from "../components/DateRangeFilter";
-import { formatDate } from "../lib/utils";
+import { formatDate, formatDateTime } from "../lib/utils";
 
 function mondayOf(d: Date) {
   const day = d.getDay();
@@ -357,6 +357,8 @@ function AttendanceRegisterCard() {
   );
 }
 
+const ATTENDANCE_REPORT_COLUMNS = ["Employee", "Date", "Clock In", "Clock Out", "Device", "Late", "Overtime (min)"];
+
 function AttendanceReportCard({
   title,
   icon: Icon,
@@ -379,8 +381,53 @@ function AttendanceReportCard({
         </CardTitle>
         <ExportButtonGroup onExport={(format) => downloadExport(attendanceReportExportUrl(format, range), `${title}.${format}`)} />
       </CardHeader>
-      <CardContent className="px-4 pb-4 pt-0 text-sm text-slate-500">
-        {isLoading ? "Loading…" : `${data?.summary.count ?? 0} record(s) in this period.`}
+      <CardContent className="space-y-2 px-4 pb-4 pt-0">
+        {isLoading || !data ? (
+          <p className="text-sm text-slate-500">Loading…</p>
+        ) : data.results.length === 0 ? (
+          <p className="text-sm text-slate-500">No records in this period.</p>
+        ) : (
+          <>
+            <div className="max-h-80 overflow-auto rounded-md border border-slate-200">
+              <table className="w-full min-w-max border-collapse text-xs">
+                <thead className="sticky top-0 bg-slate-50">
+                  <tr>
+                    {ATTENDANCE_REPORT_COLUMNS.map((h) => (
+                      <th key={h} className="whitespace-nowrap border border-slate-200 px-2 py-1.5 text-left font-semibold text-slate-600">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.results.map((row, rIdx) => (
+                    <tr key={rIdx}>
+                      {ATTENDANCE_REPORT_COLUMNS.map((h) => {
+                        const value = row[h];
+                        const display =
+                          h === "Clock In" || h === "Clock Out"
+                            ? formatDateTime(value as string | null)
+                            : h === "Late"
+                              ? value
+                                ? "Yes"
+                                : "No"
+                              : (value ?? "—");
+                        return (
+                          <td key={h} className="whitespace-nowrap border border-slate-200 px-2 py-1 text-slate-700">
+                            {display}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-slate-400">
+              Showing {data.results.length} of {data.summary.count} record(s). Export for the full report.
+            </p>
+          </>
+        )}
       </CardContent>
     </Card>
   );

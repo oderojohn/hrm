@@ -133,6 +133,12 @@ export function EmployeesPage() {
     onError: (err) => setFormError(extractErrorMessage(err)),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => employeesApi.remove(id),
+    onSuccess: invalidate,
+    onError: (err) => window.alert(extractErrorMessage(err)),
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
@@ -194,8 +200,12 @@ export function EmployeesPage() {
         data={data?.results ?? []}
         isLoading={isLoading}
         canEdit={canManage}
-        canDelete={false}
+        canDelete={canManage}
         onEdit={(row) => setDialogState({ mode: "edit", row })}
+        onDelete={(row) =>
+          window.confirm(`Remove ${row.full_name} (${row.employee_number})? This won't delete their historical records.`) &&
+          deleteMutation.mutate(row.id)
+        }
       />
 
       {data && data.num_pages > 1 && (
