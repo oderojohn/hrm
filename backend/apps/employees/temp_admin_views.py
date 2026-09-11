@@ -46,6 +46,9 @@ class TempEmployeeDiagnosticsView(View):
         )
         rows = []
         for e in employees:
+            device_names = list(
+                PunchLog.objects.filter(employee=e).exclude(device__isnull=True).values_list("device__name", flat=True).distinct()
+            )
             rows.append(
                 {
                     "employee_number": e.employee_number,
@@ -56,6 +59,7 @@ class TempEmployeeDiagnosticsView(View):
                     "employment_status": e.employment_status,
                     "is_deleted": e.is_deleted,
                     "punch_count": PunchLog.objects.filter(employee=e).count(),
+                    "devices": device_names,
                 }
             )
         return JsonResponse({"count": len(rows), "employees": rows})
