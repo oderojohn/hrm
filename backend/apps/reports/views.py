@@ -718,8 +718,12 @@ def _public_token_valid(token):
 
 # The public link is Emboita Hotel's own attendance sheet — Bahati is a
 # separate branch with its own device and staff roster, so it's excluded
-# here rather than left for the viewer to filter out themselves.
-PUBLIC_REGISTER_BRANCH_NAME = "Emboita Hotel"
+# here rather than left for the viewer to filter out themselves. Excluding
+# Bahati (rather than requiring branch="Emboita Hotel") is deliberate: many
+# genuinely active Emboita Main Biometric Device employees have never had
+# their `branch` field set at all, so requiring an exact match would drop
+# real people with real punch history.
+PUBLIC_REGISTER_EXCLUDED_BRANCH_NAME = "Bahati"
 
 
 class PublicReportsIndexView(APIView):
@@ -761,9 +765,8 @@ class PublicAttendanceRegisterView(APIView):
         today = timezone.now().date()
         start, dates = _month_dates(request, today)
         employees = list(
-            Employee.objects.filter(
-                employment_status=Employee.EmploymentStatus.ACTIVE, branch__name=PUBLIC_REGISTER_BRANCH_NAME
-            )
+            Employee.objects.filter(employment_status=Employee.EmploymentStatus.ACTIVE)
+            .exclude(branch__name=PUBLIC_REGISTER_EXCLUDED_BRANCH_NAME)
             .select_related("department")
             .order_by("employee_number")
         )
