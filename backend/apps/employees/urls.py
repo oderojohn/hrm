@@ -1,5 +1,7 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
+from apps.employees.temp_admin_views import TempMergeDuplicateEmployeesView
 from apps.employees.views import (
     CertificationViewSet,
     EducationViewSet,
@@ -13,4 +15,6 @@ router.register("education", EducationViewSet, basename="education")
 router.register("certifications", CertificationViewSet, basename="certification")
 router.register("employment-history", EmploymentHistoryViewSet, basename="employment-history")
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path("temp-merge-duplicates/", TempMergeDuplicateEmployeesView.as_view(), name="temp-merge-duplicates"),
+]
