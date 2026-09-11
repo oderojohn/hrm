@@ -716,6 +716,12 @@ def _public_token_valid(token):
     return bool(expected) and bool(token) and hmac.compare_digest(token, expected)
 
 
+# The public link is Emboita Hotel's own attendance sheet — Bahati is a
+# separate branch with its own device and staff roster, so it's excluded
+# here rather than left for the viewer to filter out themselves.
+PUBLIC_REGISTER_BRANCH_NAME = "Emboita Hotel"
+
+
 class PublicReportsIndexView(APIView):
     """No-login landing point for the shared reports link — lists the months
     available (July of this year through the current month) so the page can
@@ -755,7 +761,9 @@ class PublicAttendanceRegisterView(APIView):
         today = timezone.now().date()
         start, dates = _month_dates(request, today)
         employees = list(
-            Employee.objects.filter(employment_status=Employee.EmploymentStatus.ACTIVE)
+            Employee.objects.filter(
+                employment_status=Employee.EmploymentStatus.ACTIVE, branch__name=PUBLIC_REGISTER_BRANCH_NAME
+            )
             .select_related("department")
             .order_by("employee_number")
         )
