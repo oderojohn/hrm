@@ -18,8 +18,13 @@ frontend/dist/
 local-agent/.venv/
 local-agent/build/
 local-agent/dist/
+local-agent/build_new/
+local-agent/dist_new/
 local-agent/__pycache__/
 local-agent/**/__pycache__/
+
+# Generated attendance exports — raw device data, never committed
+/reports/
 
 # OS / editor
 .DS_Store

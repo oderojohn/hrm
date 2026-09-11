@@ -15,6 +15,7 @@ import { UsersPage } from "./pages/UsersPage";
 import { OrganizationPage } from "./pages/OrganizationPage";
 import { SystemSettingsPage } from "./pages/SystemSettingsPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { PublicReportsPage } from "./pages/PublicReportsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { AppLayout } from "./components/layout/AppLayout";
 import { ProtectedRoute, RoleRoute } from "./routes/ProtectedRoute";
@@ -38,6 +39,7 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/public/reports/:token" element={<PublicReportsPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>

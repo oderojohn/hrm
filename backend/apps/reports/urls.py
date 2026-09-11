@@ -15,6 +15,8 @@ from apps.reports.views import (
     LateArrivalsReportView,
     LeaveReportView,
     PerformanceReportView,
+    PublicAttendanceRegisterView,
+    PublicReportsIndexView,
     RecruitmentReportView,
     TrainingReportView,
     TurnoverReportView,
@@ -48,4 +50,10 @@ urlpatterns = [
     path("assets/", AssetReportView.as_view(), name="report-assets"),
     path("disciplinary/", DisciplinaryReportView.as_view(), name="report-disciplinary"),
     path("turnover/", TurnoverReportView.as_view(), name="report-turnover"),
+    path("public/<str:token>/", PublicReportsIndexView.as_view(), name="report-public-index"),
+    path(
+        "public/<str:token>/attendance-register/",
+        PublicAttendanceRegisterView.as_view(),
+        name="report-public-attendance-register",
+    ),
 ]

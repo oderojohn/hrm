@@ -3,8 +3,10 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from django.db.models import Count
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+import hmac
 import os
 
 from rest_framework.exceptions import PermissionDenied
@@ -16,8 +18,15 @@ from apps.assets.models import Asset
 from apps.attendance.models import AttendanceRecord, PunchLog
 from apps.attendance.utils import count_expected_working_days, is_expected_working_day
 from apps.communication.models import Announcement
-from apps.core.exports import export_attendance_grid_xlsx, export_csv, export_pdf, export_queryset, export_xlsx
-from apps.core.models import PublicHoliday
+from apps.core.exports import (
+    export_attendance_grid_xlsx,
+    export_combined_attendance_xlsx,
+    export_csv,
+    export_pdf,
+    export_queryset,
+    export_xlsx,
+)
+from apps.core.models import CompanyProfile, PublicHoliday
 from apps.core.permissions import IsHRManagerOrAbove
 from apps.disciplinary.models import DisciplinaryCase
 from apps.documents.models import Document
@@ -630,6 +639,147 @@ class AttendanceGridReportView(APIView):
                 "headers": headers,
                 "results": rows[:50],
                 "count": len(rows),
+            }
+        )
+
+
+def _combined_register_rows(employees, dates, today):
+    """Builds Employee/Department + per-date (Check In, Check Out) rows for the
+    printable monthly register — shared by the no-login public link (and any
+    future authenticated equivalent), since both need identical
+    Employee|Department|date columns with two sub-columns per day.
+    """
+    holiday_dates = set(
+        PublicHoliday.objects.filter(date__gte=dates[0], date__lte=dates[-1]).values_list("date", flat=True)
+    )
+    records_by_employee = defaultdict(dict)
+    for r in AttendanceRecord.objects.filter(employee__in=employees, date__gte=dates[0], date__lte=dates[-1]):
+        records_by_employee[r.employee_id][r.date] = r
+    leaves_by_employee = defaultdict(list)
+    for employee_id, leave_start, leave_end in LeaveRequest.objects.filter(
+        employee__in=employees,
+        status=LeaveRequest.Status.APPROVED,
+        start_date__lte=dates[-1],
+        end_date__gte=dates[0],
+    ).values_list("employee_id", "start_date", "end_date"):
+        leaves_by_employee[employee_id].append((leave_start, leave_end))
+
+    def day_cells(employee, day):
+        if any(s <= day <= e for s, e in leaves_by_employee.get(employee.id, [])):
+            return ("On Leave", "-")
+        record = records_by_employee.get(employee.id, {}).get(day)
+        if record and record.clock_in:
+            check_in = timezone.localtime(record.clock_in).strftime("%H:%M")
+            check_out = timezone.localtime(record.clock_out).strftime("%H:%M") if record.clock_out else "-"
+            return (check_in, check_out)
+        if day > today:
+            return ("", "")
+        if is_expected_working_day(employee, day, holiday_dates):
+            return ("Absent", "-")
+        return ("Off", "-")
+
+    rows = []
+    for employee in employees:
+        cells = [day_cells(employee, d) for d in dates]
+        rows.append(
+            (employee.employee_number, employee.full_name, employee.department.name if employee.department else "", cells)
+        )
+    return rows
+
+
+def _month_dates(request, today):
+    """Parses `?month=YYYY-MM` (defaulting to the current month) into the list
+    of dates to show — clamped so an in-progress month never lists days that
+    haven't happened yet.
+    """
+    month_param = request.query_params.get("month")
+    if month_param:
+        year_str, _, month_str = month_param.partition("-")
+        start = date(int(year_str), int(month_str), 1)
+    else:
+        start = today.replace(day=1)
+    month_end = (start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    end = min(month_end, today)
+
+    dates = []
+    cursor = start
+    while cursor <= end:
+        dates.append(cursor)
+        cursor += timedelta(days=1)
+    return start, dates or [start]
+
+
+def _public_token_valid(token):
+    """Fails closed: an unset PUBLIC_REPORTS_TOKEN means the public link is
+    disabled entirely, rather than accidentally open to anyone."""
+    expected = os.environ.get("PUBLIC_REPORTS_TOKEN", "")
+    return bool(expected) and bool(token) and hmac.compare_digest(token, expected)
+
+
+class PublicReportsIndexView(APIView):
+    """No-login landing point for the shared reports link — lists the months
+    available (July of this year through the current month) so the page can
+    render one button per month without needing a user account.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, token):
+        if not _public_token_valid(token):
+            raise Http404
+
+        today = timezone.now().date()
+        months = []
+        cursor = date(today.year, 7, 1)
+        while cursor <= today:
+            months.append({"value": cursor.strftime("%Y-%m"), "label": cursor.strftime("%B %Y")})
+            cursor = date(cursor.year + 1, 1, 1) if cursor.month == 12 else date(cursor.year, cursor.month + 1, 1)
+
+        return Response({"company": CompanyProfile.get_solo().name, "months": months})
+
+
+class PublicAttendanceRegisterView(APIView):
+    """The Employee | Department | per-day Check In/Check Out sheet itself,
+    reachable via the same unguessable token — JSON for the page's on-screen
+    preview, `?format=xlsx` for the downloadable Excel file.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, token):
+        if not _public_token_valid(token):
+            raise Http404
+
+        today = timezone.now().date()
+        start, dates = _month_dates(request, today)
+        employees = list(
+            Employee.objects.filter(employment_status=Employee.EmploymentStatus.ACTIVE)
+            .select_related("department")
+            .order_by("employee_number")
+        )
+        rows = _combined_register_rows(employees, dates, today)
+        month_label = start.strftime("%B %Y")
+
+        if request.query_params.get("format", "").lower() == "xlsx":
+            return export_combined_attendance_xlsx(
+                month_label, dates, rows, filename=f"Attendance_Report_{start.strftime('%B_%Y')}.xlsx"
+            )
+
+        return Response(
+            {
+                "month": month_label,
+                "dates": [d.isoformat() for d in dates],
+                "employees": [
+                    {
+                        "employee_number": r[0],
+                        "name": r[1],
+                        "department": r[2],
+                        "days": [{"check_in": c[0], "check_out": c[1]} for c in r[3]],
+                    }
+                    for r in rows
+                ],
             }
         )
 

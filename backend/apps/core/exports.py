@@ -176,6 +176,95 @@ def export_attendance_grid_xlsx(rows, headers, status_col_start, filename="atten
     return response
 
 
+def export_combined_attendance_xlsx(month_label, dates, rows, filename="attendance_report.xlsx"):
+    """Combined Check-In/Check-Out register: Employee | Department | two
+    columns per date (Check In, Check Out) — the classic printable monthly
+    sheet, generated for the no-login public reports link. `rows` is a list
+    of (employee_number, name, department, cells) where cells is a
+    per-date list of (check_in, check_out) strings.
+    """
+    profile = _company_profile()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = month_label[:31]
+
+    header_fill = PatternFill(start_color=BRAND_GOLD.lstrip("#"), end_color=BRAND_GOLD.lstrip("#"), fill_type="solid")
+    zebra_fill = PatternFill(start_color=BRAND_GOLD_LIGHT.lstrip("#"), end_color=BRAND_GOLD_LIGHT.lstrip("#"), fill_type="solid")
+    dark_font = Font(color=BRAND_TEXT_DARK.lstrip("#"), bold=True)
+    n_cols = 3 + 2 * len(dates)
+
+    title_row, date_row, sub_row = 1, 2, 3
+    sheet.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=n_cols)
+    title_cell = sheet.cell(row=title_row, column=1, value=f"{profile.name or 'Attendance'} — ATTENDANCE REPORT – {month_label.upper()}")
+    title_cell.font = Font(bold=True, size=13, color=BRAND_TEXT_DARK.lstrip("#"))
+    title_cell.alignment = Alignment(horizontal="center")
+
+    for col, label in enumerate(["Employee No.", "Employee", "Department"], start=1):
+        sheet.merge_cells(start_row=date_row, start_column=col, end_row=sub_row, end_column=col)
+        cell = sheet.cell(row=date_row, column=col, value=label)
+        cell.fill = header_fill
+        cell.font = dark_font
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    col = 4
+    for d in dates:
+        sheet.merge_cells(start_row=date_row, start_column=col, end_row=date_row, end_column=col + 1)
+        date_cell = sheet.cell(row=date_row, column=col, value=d.strftime("%d %b"))
+        date_cell.fill = header_fill
+        date_cell.font = dark_font
+        date_cell.alignment = Alignment(horizontal="center")
+        sheet.cell(row=date_row, column=col + 1).fill = header_fill
+        for sub_col, label in ((col, "Check In"), (col + 1, "Check Out")):
+            sub_cell = sheet.cell(row=sub_row, column=sub_col, value=label)
+            sub_cell.fill = header_fill
+            sub_cell.font = dark_font
+            sub_cell.alignment = Alignment(horizontal="center")
+        col += 2
+
+    for r_offset, (employee_number, name, department, cells) in enumerate(rows):
+        row_num = sub_row + 1 + r_offset
+        sheet.cell(row=row_num, column=1, value=employee_number)
+        sheet.cell(row=row_num, column=2, value=name)
+        sheet.cell(row=row_num, column=3, value=department)
+        if r_offset % 2 == 1:
+            for c in (1, 2, 3):
+                sheet.cell(row=row_num, column=c).fill = zebra_fill
+
+        col = 4
+        for check_in, check_out in cells:
+            in_cell = sheet.cell(row=row_num, column=col, value=check_in)
+            out_cell = sheet.cell(row=row_num, column=col + 1, value=check_out)
+            status_key = {"Absent": "A", "On Leave": "LV", "Off": "OFF"}.get(check_in)
+            if status_key:
+                fill = PatternFill(
+                    start_color=ATTENDANCE_STATUS_FILL[status_key], end_color=ATTENDANCE_STATUS_FILL[status_key], fill_type="solid"
+                )
+                in_cell.fill = fill
+                out_cell.fill = fill
+                in_cell.font = Font(color=ATTENDANCE_STATUS_TEXT[status_key], bold=True)
+            in_cell.alignment = Alignment(horizontal="center")
+            out_cell.alignment = Alignment(horizontal="center")
+            col += 2
+
+    sheet.column_dimensions["A"].width = 14
+    sheet.column_dimensions["B"].width = 22
+    sheet.column_dimensions["C"].width = 16
+    for c in range(4, n_cols + 1):
+        sheet.column_dimensions[get_column_letter(c)].width = 10
+
+    sheet.freeze_panes = sheet.cell(row=sub_row + 1, column=4)
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    response = HttpResponse(
+        buffer.read(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
 def _format_cell(value):
     if value is None or value == "":
         return "—"
